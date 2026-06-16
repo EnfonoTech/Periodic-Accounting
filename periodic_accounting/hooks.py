@@ -148,23 +148,14 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"periodic_accounting.tasks.all"
-# 	],
-# 	"daily": [
-# 		"periodic_accounting.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"periodic_accounting.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"periodic_accounting.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"periodic_accounting.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"cron": {
+		# Last day of every month at 23:30
+		"30 23 28-31 * *": [
+			"periodic_accounting.tasks.auto_periodic_stock_reconciliation"
+		]
+	}
+}
 
 # Testing
 # -------

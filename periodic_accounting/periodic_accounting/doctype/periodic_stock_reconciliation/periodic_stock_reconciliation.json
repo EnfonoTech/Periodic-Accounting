@@ -1,0 +1,152 @@
+{
+ "actions": [],
+ "allow_import": 0,
+ "autoname": "PSR-.YYYY.-.MM.-.####",
+ "creation": "2026-06-16 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "posting_date",
+  "for_all_stock_accounts",
+  "stock_account",
+  "cost_center",
+  "difference_account",
+  "section_break_calculated",
+  "get_balance",
+  "accounts",
+  "section_break_links",
+  "journal_entry",
+  "amended_from",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "label": "Posting Date",
+   "reqd": 1,
+   "default": "Today"
+  },
+  {
+   "fieldname": "for_all_stock_accounts",
+   "fieldtype": "Check",
+   "label": "For All Stock Accounts",
+   "default": "1"
+  },
+  {
+   "fieldname": "stock_account",
+   "fieldtype": "Link",
+   "label": "Stock Account",
+   "options": "Account",
+   "depends_on": "eval:!doc.for_all_stock_accounts"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center",
+   "description": "Optional. When set, stamped on every Journal Entry row (for P&L by cost center)."
+  },
+  {
+   "fieldname": "difference_account",
+   "fieldtype": "Link",
+   "label": "Difference Account (COGS)",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_calculated",
+   "fieldtype": "Section Break",
+   "label": "Calculated Entries"
+  },
+  {
+   "fieldname": "get_balance",
+   "fieldtype": "Button",
+   "label": "Get Balance"
+  },
+  {
+   "fieldname": "accounts",
+   "fieldtype": "Table",
+   "label": "Accounts",
+   "options": "PSR Account Detail"
+  },
+  {
+   "fieldname": "section_break_links",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "options": "Periodic Stock Reconciliation",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-06-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Periodic Accounting",
+ "name": "Periodic Stock Reconciliation",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
