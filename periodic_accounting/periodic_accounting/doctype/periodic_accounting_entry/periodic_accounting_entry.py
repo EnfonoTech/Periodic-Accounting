@@ -5,7 +5,7 @@ from frappe.utils import flt
 from erpnext.accounts.utils import get_stock_and_account_balance
 
 
-class PeriodicStockReconciliation(Document):
+class PeriodicAccountingEntry(Document):
 
 	def validate(self):
 		self.validate_company()
@@ -15,7 +15,7 @@ class PeriodicStockReconciliation(Document):
 		if frappe.db.get_value("Company", self.company, "enable_perpetual_inventory"):
 			frappe.throw(
 				_(
-					"Periodic Stock Reconciliation is only for companies with "
+					"Periodic Accounting Entry is only for companies with "
 					"Perpetual Inventory DISABLED. Company {0} has perpetual "
 					"inventory enabled. Use standard ERPNext for COGS tracking."
 				).format(frappe.bold(self.company))
@@ -102,7 +102,7 @@ class PeriodicStockReconciliation(Document):
 			)
 
 		self.remarks = (
-			f"Periodic Stock Reconciliation — {self.posting_date}\n"
+			f"Periodic Accounting Entry — {self.posting_date}\n"
 			+ "\n".join(log_lines)
 			+ f"\n\nTotal Net Difference: {total_difference:.3f}"
 		)
@@ -144,7 +144,7 @@ class PeriodicStockReconciliation(Document):
 		je.posting_date = self.posting_date
 		je.company = self.company
 		je.user_remark = (
-			f"[PERIODIC STOCK RECONCILIATION] {self.name} | "
+			f"[PERIODIC ACCOUNTING ENTRY] {self.name} | "
 			f"Auto-generated entry as at {self.posting_date}"
 		)
 

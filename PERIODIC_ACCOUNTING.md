@@ -2,7 +2,7 @@
 
 This app provides two features for companies running **Periodic Inventory** in ERPNext:
 
-1. **Periodic Stock Reconciliation (PSR)** — month-end voucher to recognise closing stock on the Balance Sheet and correct COGS.
+1. **Periodic Accounting Entry (PAE)** — month-end voucher to recognise closing stock on the Balance Sheet and correct COGS.
 2. **Realtime Trading Account Report** — live P&L-style trading account with drill-down links to source registers.
 
 ---
@@ -16,7 +16,7 @@ Go to: **Setup → Company → [Your Company]**
 - Uncheck **"Enable Perpetual Inventory"**
 - Save
 
-> This switches ERPNext to Periodic Inventory mode. Stock movements (Purchase Receipt, Delivery Note) will update `tabBin` only — **no GL entries are posted for stock movements**.
+> This switches ERPNext to Periodic Inventory mode. Stock movements (Purchase Receipt, Delivery Note) update `tabBin` only — **no GL entries are posted for stock movements**.
 
 ### 1.2 Chart of Accounts — Stock Adjustment Account
 
@@ -31,27 +31,25 @@ Create a leaf account under your COGS group:
 | Root Type | Expense |
 | Is Group | No |
 
-This account is used as the **Difference Account** on every PSR. The JE credits this account (reducing net COGS) when closing stock is recognised.
+This account is used as the **Difference Account** on every PAE. The JE credits this account (reducing net COGS) when closing stock is recognised.
 
-### 1.3 Stock Accounts on Warehouse Master *(only if you have multiple stock accounts)*
+### 1.3 Stock Account on Warehouse Master *(required only if multiple stock accounts)*
 
-If your Chart of Accounts has more than one Stock-type account (e.g. *Trading Inventory* and *Stock In Transit*), each warehouse must be linked to the correct account:
+If your Chart of Accounts has more than one Stock-type account (e.g. *Trading Inventory* and *Stock In Transit*), each warehouse must be linked to the correct account so ERPNext can split stock values correctly:
 
-Go to: **Stock → Warehouse → [Warehouse Name]**
+Go to: **Stock → Warehouse → [Warehouse Name]** → set the **Account** field.
 
-- Set **Account** field → select the stock account this warehouse feeds into
+ERPNext v16's `get_stock_and_account_balance` uses this mapping to compute the correct bin value per stock account when "For All Stock Accounts" is ticked. If left blank on a multi-account COA, all warehouses are summed against every stock account (double-counting).
 
-ERPNext's `get_stock_and_account_balance` uses this mapping to compute the correct bin value per stock account. If left blank, all warehouses are summed against every stock account (double-counting).
+> If the company has only **one** stock account, no warehouse-to-account mapping is needed — all company warehouse balances are summed automatically.
 
-### 1.4 Cost Center on Warehouse Master *(optional — for P&L by branch)*
+### 1.4 Cost Center on PAE *(optional — for P&L attribution)*
 
-If you want the PSR Journal Entry to carry a cost center (so the closing stock entry appears in the correct branch P&L):
+The **Cost Center** field on the PAE form is purely an attribution tag. When set, it is stamped on every Journal Entry row so the Stock Adjustment credit appears under that cost center in the standard P&L report.
 
-Go to: **Stock → Warehouse → [Warehouse Name]**
+**Important:** this field does **not** filter which warehouses are included in the stock balance calculation. The stock balance always covers all warehouses linked to the stock account (or all company warehouses if only one account exists). The cost center is only for GL tagging.
 
-- Set **Cost Center** field
-
-Then, on the PSR form, set the **Cost Center** field before clicking Get Balance — it will be stamped on all JE rows.
+To accurately split a closing stock entry across two branches, set up a **separate stock account per branch** (via the Warehouse → Account mapping in 1.3), then run one PAE per account.
 
 ### 1.5 Item Setup
 
@@ -70,15 +68,13 @@ In periodic inventory, **stock accounts are not touched by day-to-day transactio
 | Purchase Invoice | Dr COGS / Cr Accounts Payable | Qty increases (if `update_stock=1`) |
 | Sales Invoice (update_stock=1) | Dr AR / Cr Sales Revenue | Qty decreases |
 | Delivery Note | None | Qty decreases |
-| **PSR (month-end)** | **Dr Trading Inventory / Cr Stock Adjustment** | No change |
+| **PAE (month-end)** | **Dr Trading Inventory / Cr Stock Adjustment** | No change |
 
-The PSR corrects the over-stated COGS: all purchases hit COGS immediately, but the closing stock (goods still on hand) must be recognised as an asset and removed from COGS expense.
+The PAE corrects over-stated COGS: all purchases hit COGS immediately, but closing stock (goods still on hand) must be recognised as a Balance Sheet asset and removed from COGS.
 
 ---
 
 ## 3. Test Entry Flow
-
-Use the following sequence to verify the feature end-to-end.
 
 **Assumptions:**
 - Company: SF Trading (currency BHD)
@@ -97,29 +93,23 @@ Use the following sequence to verify the feature end-to-end.
 | Field | Value |
 |---|---|
 | Supplier | *(any)* |
-| Item | Pencil |
-| Qty | 10 |
-| Rate | 25 |
+| Item | Pencil, Qty 10, Rate 25 |
 | Warehouse | Stores - ST |
 
-**Result after save/submit:**
-- tabBin: Pencil @ Stores — 10 units @ BHD 25 = **BHD 250**
-- GL: no entry
+**Result:** tabBin — 10 units @ BHD 25 = **BHD 250** | GL — no entry
 
 ---
 
 ### Step 2 — Purchase Invoice
 
-> Posts the COGS entry. If `update_stock=1`, also moves stock (skip Step 1 then).
+> Posts the COGS entry. Set `update_stock=1` if skipping Step 1.
 
 **Document:** Purchase Invoice
 | Field | Value |
 |---|---|
 | Supplier | *(any)* |
 | Update Stock | ✓ (if no separate Purchase Receipt) |
-| Item | Pencil |
-| Qty | 10 |
-| Rate | 25 |
+| Item | Pencil, Qty 10, Rate 25 |
 | Expense Account | Local Purchases - ST |
 
 **GL entries posted:**
@@ -128,22 +118,16 @@ Dr  Local Purchases (COGS)    BHD 250
 Cr  Accounts Payable          BHD 250
 ```
 
-**tabBin:** 10 units @ BHD 25 = BHD 250
-
 ---
 
 ### Step 3 — Sales Invoice (with Update Stock)
-
-> Records revenue and reduces stock.
 
 **Document:** Sales Invoice
 | Field | Value |
 |---|---|
 | Customer | *(any)* |
 | Update Stock | ✓ |
-| Item | Pencil |
-| Qty | 4 |
-| Rate | 40 |
+| Item | Pencil, Qty 4, Rate 40 |
 | Warehouse | Stores - ST |
 
 **GL entries posted:**
@@ -152,32 +136,29 @@ Dr  Accounts Receivable    BHD 160
 Cr  Sales Revenue          BHD 160
 ```
 
-**tabBin:** 6 units @ BHD 25 = **BHD 150** *(4 units sold)*
+**tabBin after:** 6 units @ BHD 25 = **BHD 150**
 
 ---
 
-### Step 4 — Periodic Stock Reconciliation
+### Step 4 — Periodic Accounting Entry
 
-> Month-end entry to recognise closing stock as an asset and reduce COGS.
-
-**Document:** Periodic Accounting → Periodic Stock Reconciliation → New
+**Path:** Periodic Accounting → Periodic Accounting Entry → New
 
 | Field | Value |
 |---|---|
 | Company | SF Trading |
 | Posting Date | Last day of month |
 | For All Stock Accounts | ✓ |
-| Cost Center | *(optional — for branch P&L)* |
+| Cost Center | *(optional)* |
 | Difference Account | Stock Adjustment - ST |
 
-Click **Get Balance**.
-
-The system computes per stock account:
-- `stock_bal` = BHD 150 (from tabBin)
-- `account_bal` = BHD 0 (Trading Inventory GL has no prior entries)
+Click **Get Balance**. The system computes per stock account:
+- `stock_bal` = BHD 150 (tabBin)
+- `account_bal` = BHD 0 (no prior PAE)
 - Difference = **BHD 150**
 
 **Accounts table populated:**
+
 | Account | Dr | Cr |
 |---|---|---|
 | Trading Inventory - ST | 150 | |
@@ -195,10 +176,10 @@ Cr  Stock Adjustment (COGS)         BHD 150
 
 ### Next Month — Incremental Reconciliation
 
-In Month 2, suppose 2 more units purchased (BHD 50) and 3 units sold:
+Suppose 2 more units purchased (BHD 50) and 3 units sold:
 - tabBin closing = 5 units @ BHD 25 = BHD 125
-- Trading Inventory GL balance = BHD 150 (from Month 1 PSR)
-- Difference = 125 − 150 = **−BHD 25** (stock reduced)
+- Trading Inventory GL balance = BHD 150 (from Month 1 PAE)
+- Difference = 125 − 150 = **−BHD 25**
 
 **JE posted:**
 ```
@@ -206,13 +187,13 @@ Cr  Trading Inventory (BS Asset)    BHD 25
 Dr  Stock Adjustment (COGS)         BHD 25
 ```
 
-The PSR always reconciles to the *current* tabBin value, incrementally.
+The PAE always reconciles to the current tabBin value, incrementally.
 
 ---
 
 ## 4. GL / Ledger Reflection
 
-### After all steps above, the General Ledger shows:
+After all steps above:
 
 | Account | Dr | Cr | Net |
 |---|---|---|---|
@@ -237,14 +218,7 @@ Net COGS             100
 
 **Path:** Accounts → Reports → Realtime Trading Account Report
 
-**Filters:**
-
-| Filter | Description |
-|---|---|
-| Company | Required |
-| From Date | Period start (defaults to month start) |
-| To Date | Period end (defaults to today) |
-| Warehouse | Optional — narrow stock figures to one warehouse |
+**Filters:** Company (req), From Date, To Date, Warehouse (optional)
 
 **How each row is computed:**
 
@@ -259,26 +233,20 @@ Net COGS             100
 | COGS | Opening + Net Purchases − Closing |
 | Gross Profit | Net Sales − COGS |
 
-**Drill-down links:**
+**Drill-down links:** Sales rows → Sales Register | Purchase rows → Purchase Register | Stock rows → Stock Balance
 
-| Row | Clicks through to |
-|---|---|
-| Sales rows | Sales Register |
-| Purchase rows | Purchase Register |
-| Opening / Closing Stock | Stock Balance report |
+> The report uses **live tabBin** for closing stock, not the PAE JE, so it reflects real-time stock value even before the month-end entry is posted.
 
-**Result with test data above:**
+**Expected output with test data:**
 ```
 SALES
   Gross Sales Revenue          160 Cr
-  Less: Sales Returns            0
 Net Sales Revenue              160 Cr
 
 COST OF SALES
   Opening Stock                  0
   Add: Gross Purchases         250 Dr
   Net Purchases                250 Dr
-
   Goods Available for Sale     250
   Less: Closing Stock (Live)   150 Cr
 
@@ -287,15 +255,13 @@ COST OF GOODS SOLD             100 Dr
 GROSS PROFIT                    60 Cr
 ```
 
-> The report uses **live tabBin** for closing stock (not the PSR JE), so it reflects real-time stock value even before the month-end PSR is posted. This is by design — the trading account is always current.
-
 ---
 
 ## 6. Standard P&L Report (ERPNext)
 
 **Path:** Accounts → Reports → Profit and Loss Statement
 
-After the PSR JE is submitted, the standard ERPNext P&L correctly shows:
+After the PAE JE is submitted:
 
 ```
 Income
@@ -303,21 +269,16 @@ Income
 
 Expense (COGS group)
   Local Purchases               250
-  Stock Adjustment             (150)   ← PSR credit reduces COGS
+  Stock Adjustment             (150)   ← PAE credit reduces COGS
   ─────────────────────────────────
   Net COGS                      100
 
 Gross Profit                     60
 ```
 
-**Before PSR is submitted**, the P&L will show COGS = 250 (over-stated) because closing stock has not yet been recognised. This is expected in periodic inventory — the PSR is the month-end correction entry.
+**Before PAE is submitted**, P&L shows COGS = 250 (over-stated). This is expected — the PAE is the month-end correction.
 
-### P&L by Cost Center
-
-If Cost Center is set on the PSR:
-1. The JE rows carry the cost center
-2. In **Profit and Loss Statement**, set the **Cost Center** filter
-3. The Stock Adjustment credit will appear under the correct branch, giving an accurate branch-level GP
+**P&L by Cost Center:** If Cost Center is set on the PAE, the Stock Adjustment JE rows carry that cost center. Filter the P&L report by that cost center to see the closing stock credit attributed to the correct branch. Note that the stock balance calculation itself is not filtered by cost center — only the GL tagging is. For a proper per-branch split, use separate stock accounts per warehouse (Section 1.3).
 
 ---
 
@@ -325,8 +286,8 @@ If Cost Center is set on the PSR:
 
 | Rule | Detail |
 |---|---|
-| PSR only for periodic companies | Controller rejects if `enable_perpetual_inventory = 1` |
-| Difference Account must be COGS type | Filtered in the form to `account_type = Cost of Goods Sold` |
+| PAE only for periodic companies | Controller rejects if `enable_perpetual_inventory = 1` |
+| Difference Account must be COGS type | Form filter enforces `account_type = Cost of Goods Sold` |
 | Multiple stock accounts | Set `account` on each Warehouse master; ERPNext splits automatically |
-| Amend support | PSR is submittable; amend cancels the linked JE and recreates |
-| Scheduler | `auto_periodic_stock_reconciliation` runs on last day of month at 23:30 for all periodic companies |
+| Amend support | PAE is submittable; amend cancels the linked JE and recreates |
+| Scheduler | `auto_periodic_accounting_entry` runs on last day of month at 23:30 for all periodic companies |

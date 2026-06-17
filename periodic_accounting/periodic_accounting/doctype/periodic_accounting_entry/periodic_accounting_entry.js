@@ -1,4 +1,4 @@
-frappe.ui.form.on("Periodic Stock Reconciliation", {
+frappe.ui.form.on("Periodic Accounting Entry", {
 
 	refresh(frm) {
 		frm.trigger("set_account_filters");

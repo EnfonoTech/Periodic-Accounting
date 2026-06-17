@@ -1,10 +1,10 @@
 import frappe
 
 
-def auto_periodic_stock_reconciliation():
+def auto_periodic_accounting_entry():
 	"""
 	Runs on last day of month at 23:30.
-	Creates and submits Periodic Stock Reconciliation
+	Creates and submits a Periodic Accounting Entry
 	for all companies with perpetual inventory disabled.
 	"""
 	from frappe.utils import get_last_day, today
@@ -30,7 +30,7 @@ def auto_periodic_stock_reconciliation():
 
 			if not diff_account:
 				frappe.log_error(
-					title=f"PSR Skipped — {company}",
+					title=f"PAE Skipped — {company}",
 					message=(
 						"Stock Adjustment account not found. "
 						"Create under COGS with account_type = Cost of Goods Sold."
@@ -38,27 +38,27 @@ def auto_periodic_stock_reconciliation():
 				)
 				continue
 
-			psr = frappe.new_doc("Periodic Stock Reconciliation")
-			psr.company = company
-			psr.posting_date = get_last_day(today())
-			psr.for_all_stock_accounts = 1
-			psr.difference_account = diff_account
+			pae = frappe.new_doc("Periodic Accounting Entry")
+			pae.company = company
+			pae.posting_date = get_last_day(today())
+			pae.for_all_stock_accounts = 1
+			pae.difference_account = diff_account
 
-			psr.get_balance()
+			pae.get_balance()
 
-			if not psr.accounts:
-				frappe.logger().info(f"No stock difference for {company} — PSR skipped")
+			if not pae.accounts:
+				frappe.logger().info(f"No stock difference for {company} — PAE skipped")
 				continue
 
-			psr.insert(ignore_permissions=True)
-			psr.submit()
+			pae.insert(ignore_permissions=True)
+			pae.submit()
 
-			frappe.logger().info(f"PSR {psr.name} submitted for {company}")
+			frappe.logger().info(f"PAE {pae.name} submitted for {company}")
 			frappe.db.commit()
 
 		except Exception:
 			frappe.log_error(
-				title=f"PSR Auto-Run Failed — {company}",
+				title=f"PAE Auto-Run Failed — {company}",
 				message=frappe.get_traceback(),
 			)
 			frappe.db.rollback()

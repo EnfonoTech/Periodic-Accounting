@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_import": 0,
- "autoname": "PSR-.YYYY.-.MM.-.####",
+ "autoname": "PAE-.YYYY.-.MM.-.####",
  "creation": "2026-06-16 00:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -53,7 +53,7 @@
    "fieldtype": "Link",
    "label": "Cost Center",
    "options": "Cost Center",
-   "description": "Optional. When set, stamped on every Journal Entry row (for P&L by cost center)."
+   "description": "Optional. Stamped on every Journal Entry row for P&L attribution."
   },
   {
    "fieldname": "difference_account",
@@ -93,7 +93,7 @@
    "fieldname": "amended_from",
    "fieldtype": "Link",
    "label": "Amended From",
-   "options": "Periodic Stock Reconciliation",
+   "options": "Periodic Accounting Entry",
    "print_hide": 1,
    "read_only": 1
   },
@@ -110,7 +110,7 @@
  "modified": "2026-06-16 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Periodic Accounting",
- "name": "Periodic Stock Reconciliation",
+ "name": "Periodic Accounting Entry",
  "owner": "Administrator",
  "permissions": [
   {

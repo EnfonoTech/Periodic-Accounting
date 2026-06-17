@@ -152,7 +152,7 @@ scheduler_events = {
 	"cron": {
 		# Last day of every month at 23:30
 		"30 23 28-31 * *": [
-			"periodic_accounting.tasks.auto_periodic_stock_reconciliation"
+			"periodic_accounting.tasks.auto_periodic_accounting_entry"
 		]
 	}
 }
