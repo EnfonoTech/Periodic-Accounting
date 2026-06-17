@@ -49,7 +49,7 @@ class PeriodicAccountingEntry(Document):
 		total_difference = 0
 
 		for account in stock_accounts:
-			account_bal, stock_bal, _ = get_stock_and_account_balance(
+			account_bal, stock_bal, _wh = get_stock_and_account_balance(
 				account, self.posting_date, self.company
 			)
 

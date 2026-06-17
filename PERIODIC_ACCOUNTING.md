@@ -18,13 +18,13 @@ Go to: **Setup → Company → [Your Company]**
 
 > This switches ERPNext to Periodic Inventory mode. Stock movements (Purchase Receipt, Delivery Note) update `tabBin` only — **no GL entries are posted for stock movements**.
 
-### 1.2 Chart of Accounts — Stock Adjustment Account
+### 1.2 Chart of Accounts — Periodic Entry Difference Account
 
 Create a leaf account under your COGS group:
 
 | Field | Value |
 |---|---|
-| Account Name | Stock Adjustment |
+| Account Name | Periodic Entry Difference Account |
 | Account Number | *(e.g. 51010600001)* |
 | Parent Account | *(your COGS group, e.g. 5101 - COGS)* |
 | Account Type | **Cost of Goods Sold** |
@@ -39,13 +39,13 @@ If your Chart of Accounts has more than one Stock-type account (e.g. *Trading In
 
 Go to: **Stock → Warehouse → [Warehouse Name]** → set the **Account** field.
 
-ERPNext v16's `get_stock_and_account_balance` uses this mapping to compute the correct bin value per stock account when "For All Stock Accounts" is ticked. If left blank on a multi-account COA, all warehouses are summed against every stock account (double-counting).
+ERPNext's `get_stock_and_account_balance` uses this mapping to compute the correct bin value per stock account when "For All Stock Accounts" is ticked. If left blank on a multi-account COA, all warehouses are summed against every stock account (double-counting).
 
 > If the company has only **one** stock account, no warehouse-to-account mapping is needed — all company warehouse balances are summed automatically.
 
 ### 1.4 Cost Center on PAE *(optional — for P&L attribution)*
 
-The **Cost Center** field on the PAE form is purely an attribution tag. When set, it is stamped on every Journal Entry row so the Stock Adjustment credit appears under that cost center in the standard P&L report.
+The **Cost Center** field on the PAE form is purely an attribution tag. When set, it is stamped on every Journal Entry row so the Periodic Entry Difference Account credit appears under that cost center in the standard P&L report.
 
 **Important:** this field does **not** filter which warehouses are included in the stock balance calculation. The stock balance always covers all warehouses linked to the stock account (or all company warehouses if only one account exists). The cost center is only for GL tagging.
 
@@ -68,7 +68,7 @@ In periodic inventory, **stock accounts are not touched by day-to-day transactio
 | Purchase Invoice | Dr COGS / Cr Accounts Payable | Qty increases (if `update_stock=1`) |
 | Sales Invoice (update_stock=1) | Dr AR / Cr Sales Revenue | Qty decreases |
 | Delivery Note | None | Qty decreases |
-| **PAE (month-end)** | **Dr Trading Inventory / Cr Stock Adjustment** | No change |
+| **PAE (month-end)** | **Dr Trading Inventory / Cr Periodic Entry Difference Account** | No change |
 
 The PAE corrects over-stated COGS: all purchases hit COGS immediately, but closing stock (goods still on hand) must be recognised as a Balance Sheet asset and removed from COGS.
 
@@ -150,7 +150,7 @@ Cr  Sales Revenue          BHD 160
 | Posting Date | Last day of month |
 | For All Stock Accounts | ✓ |
 | Cost Center | *(optional)* |
-| Difference Account | Stock Adjustment - ST |
+| Difference Account | Periodic Entry Difference Account - ST |
 
 Click **Get Balance**. The system computes per stock account:
 - `stock_bal` = BHD 150 (tabBin)
@@ -162,14 +162,14 @@ Click **Get Balance**. The system computes per stock account:
 | Account | Dr | Cr |
 |---|---|---|
 | Trading Inventory - ST | 150 | |
-| Stock Adjustment - ST | | 150 |
+| Periodic Entry Difference Account - ST | | 150 |
 
 **Submit** → Journal Entry auto-created and linked.
 
 **JE posted:**
 ```
-Dr  Trading Inventory (BS Asset)    BHD 150
-Cr  Stock Adjustment (COGS)         BHD 150
+Dr  Trading Inventory (BS Asset)              BHD 150
+Cr  Periodic Entry Difference Account (COGS)  BHD 150
 ```
 
 ---
@@ -183,8 +183,8 @@ Suppose 2 more units purchased (BHD 50) and 3 units sold:
 
 **JE posted:**
 ```
-Cr  Trading Inventory (BS Asset)    BHD 25
-Dr  Stock Adjustment (COGS)         BHD 25
+Cr  Trading Inventory (BS Asset)              BHD 25
+Dr  Periodic Entry Difference Account (COGS)  BHD 25
 ```
 
 The PAE always reconciles to the current tabBin value, incrementally.
@@ -202,14 +202,14 @@ After all steps above:
 | Accounts Receivable | 160 | — | 160 Dr |
 | Sales Revenue | — | 160 | 160 Cr |
 | Trading Inventory (BS) | 150 | — | 150 Dr |
-| Stock Adjustment (COGS) | — | 150 | 150 Cr |
+| Periodic Entry Difference Account (COGS) | — | 150 | 150 Cr |
 
 **Net COGS on the P&L:**
 ```
-Local Purchases     +250
-Stock Adjustment    −150
-──────────────────────────
-Net COGS             100
+Local Purchases                        +250
+Periodic Entry Difference Account      −150
+──────────────────────────────────────────
+Net COGS                                100
 ```
 
 ---
@@ -265,20 +265,20 @@ After the PAE JE is submitted:
 
 ```
 Income
-  Sales Revenue                 160
+  Sales Revenue                              160
 
 Expense (COGS group)
-  Local Purchases               250
-  Stock Adjustment             (150)   ← PAE credit reduces COGS
-  ─────────────────────────────────
-  Net COGS                      100
+  Local Purchases                            250
+  Periodic Entry Difference Account         (150)   ← PAE credit reduces COGS
+  ──────────────────────────────────────────────
+  Net COGS                                   100
 
-Gross Profit                     60
+Gross Profit                                  60
 ```
 
 **Before PAE is submitted**, P&L shows COGS = 250 (over-stated). This is expected — the PAE is the month-end correction.
 
-**P&L by Cost Center:** If Cost Center is set on the PAE, the Stock Adjustment JE rows carry that cost center. Filter the P&L report by that cost center to see the closing stock credit attributed to the correct branch. Note that the stock balance calculation itself is not filtered by cost center — only the GL tagging is. For a proper per-branch split, use separate stock accounts per warehouse (Section 1.3).
+**P&L by Cost Center:** If Cost Center is set on the PAE, the Periodic Entry Difference Account JE rows carry that cost center. Filter the P&L report by that cost center to see the closing stock credit attributed to the correct branch. Note that the stock balance calculation itself is not filtered by cost center — only the GL tagging is. For a proper per-branch split, use separate stock accounts per warehouse (Section 1.3).
 
 ---
 

@@ -2,6 +2,7 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 
 	refresh(frm) {
 		frm.trigger("set_account_filters");
+		frm.clear_custom_buttons();
 
 		if (frm.doc.docstatus === 0) {
 			frm.add_custom_button(__("Get Balance"), () => {
@@ -60,18 +61,12 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 			return;
 		}
 
-		frappe.show_progress(__("Calculating..."), 0, 100);
-
 		frm.call({
 			method: "get_balance",
 			doc: frm.doc,
 			callback(r) {
-				frappe.hide_progress();
 				frm.refresh_field("accounts");
 				frm.refresh_field("remarks");
-			},
-			error() {
-				frappe.hide_progress();
 			}
 		});
 	},
