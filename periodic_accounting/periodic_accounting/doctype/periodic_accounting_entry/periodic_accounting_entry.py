@@ -355,14 +355,16 @@ class PeriodicAccountingEntry(Document):
 
 	def get_stock_accounts(self):
 		if self.for_all_stock_accounts:
-			# Only include accounts that have at least one warehouse mapped to them.
-			# get_stock_and_account_balance() derives Bin value from warehouse→account links,
-			# so stock-typed accounts with no warehouse (e.g. Stock In Transit holding account)
-			# would return a fallback company-total Bin and cause double-counting.
+			# Only include non-transit warehouses with account mappings.
+			# Transit warehouses (Stock In Transit) hold goods temporarily during
+			# inter-warehouse transfers; their Bin value is NOT closing stock and
+			# must not be included in the PAE inventory balance.
 			return frappe.db.sql_list("""
 				SELECT DISTINCT w.account
 				FROM `tabWarehouse` w
-				WHERE w.company = %s AND w.account IS NOT NULL AND w.account != ''
+				WHERE w.company = %s
+				  AND w.account IS NOT NULL AND w.account != ''
+				  AND (w.warehouse_type IS NULL OR w.warehouse_type != 'Transit')
 			""", self.company)
 		return [self.stock_account]
 
