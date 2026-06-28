@@ -165,7 +165,7 @@ def sales_data(co, fd, td, cc=None):
         FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account
         WHERE gle.company=%(company)s AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
           AND gle.voucher_type IN ('Sales Invoice','Delivery Note') AND gle.is_cancelled=0
-          AND acc.root_type='Income' AND acc.account_type='Income Account' {cc_cond}
+          AND acc.root_type='Income' {cc_cond}
     """, p, as_dict=True)
     g = flt(r[0].gross); ret = flt(r[0].ret)
     return g, ret, g - ret

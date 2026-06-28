@@ -263,27 +263,28 @@ def get_closing_by_item(co, td, wh, ig, item):
 
 
 def get_gl_cogs_by_item(co, fd, td, cc):
-    """GL COGS per item from perpetual auto-entries (via SI/DN item lines)."""
+    """GL COGS per item from perpetual auto-entries.
+
+    ERPNext sets voucher_detail_no on COGS GL entries to the Stock Ledger Entry
+    name (not the SI/DN item row name), so we resolve item_code via SLE.
+    """
     p = {"company": co, "from_date": fd, "to_date": td}
     cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
     if cc: p["cost_center"] = cc
     r = frappe.db.sql(f"""
         SELECT
-            COALESCE(sii.item_code, dni.item_code) AS item_code,
+            sle.item_code AS item_code,
             COALESCE(SUM(gle.debit-gle.credit),0) AS v
         FROM `tabGL Entry` gle
         INNER JOIN `tabAccount` acc ON acc.name=gle.account
-        LEFT JOIN `tabSales Invoice Item` sii
-            ON sii.name=gle.voucher_detail_no AND gle.voucher_type='Sales Invoice'
-        LEFT JOIN `tabDelivery Note Item` dni
-            ON dni.name=gle.voucher_detail_no AND gle.voucher_type='Delivery Note'
+        LEFT JOIN `tabStock Ledger Entry` sle ON sle.name=gle.voucher_detail_no
         WHERE gle.company=%(company)s
           AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
           AND gle.voucher_type IN ('Sales Invoice','Delivery Note')
           AND gle.is_cancelled=0
           AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold'
           {cc_cond}
-        GROUP BY COALESCE(sii.item_code, dni.item_code)
+        GROUP BY sle.item_code
     """, p, as_dict=True)
     return {row.item_code: flt(row.v) for row in r if row.item_code}
 
