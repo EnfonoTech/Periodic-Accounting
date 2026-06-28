@@ -60,8 +60,12 @@ def _sales_reg(company, from_date, to_date):
 	return _url("Sales Register", {"company": company, "from_date": from_date, "to_date": to_date})
 
 
-def _pur_reg(company, from_date, to_date):
-	return _url("Purchase Register", {"company": company, "from_date": from_date, "to_date": to_date})
+def _stock_ledger(company, from_date, to_date, warehouse=None):
+	"""Stock Ledger report — the actual source of Gross Purchases / Returns figures (SLE-based)."""
+	p = {"company": company, "from_date": from_date, "to_date": to_date}
+	if warehouse:
+		p["warehouse"] = warehouse
+	return _url("Stock Ledger", p)
 
 
 def _stock_bal(company, as_of_date, warehouse=None):
@@ -225,10 +229,10 @@ def get_data(filters):
 		    link=_stock_bal(co, opening_date, wh)),
 		row("Add: Gross Purchases",
 		    debit=gross_pur, indent=1,
-		    link=_pur_reg(co, fd, td)),
+		    link=_stock_ledger(co, fd, td, wh)),
 		row("Less: Purchase Returns",
 		    credit=pur_returns, indent=1,
-		    link=_pur_reg(co, fd, td)),
+		    link=_stock_ledger(co, fd, td, wh)),
 		row("Net Purchases",
 		    debit=net_purchases, bold=True),
 		row("Goods Available for Sale",
