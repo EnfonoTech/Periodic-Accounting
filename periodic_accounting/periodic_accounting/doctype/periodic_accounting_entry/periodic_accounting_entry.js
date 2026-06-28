@@ -12,9 +12,17 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 
 		if (frm.doc.journal_entry) {
 			frm.add_custom_button(
-				__("View Journal Entry"),
+				__("Closing Stock Entry"),
 				() => frappe.set_route("Form", "Journal Entry", frm.doc.journal_entry),
-				__("Links")
+				__("View")
+			);
+		}
+
+		if (frm.doc.opening_stock_journal_entry) {
+			frm.add_custom_button(
+				__("Opening Stock Entry"),
+				() => frappe.set_route("Form", "Journal Entry", frm.doc.opening_stock_journal_entry),
+				__("View")
 			);
 		}
 	},
@@ -29,10 +37,9 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 			}
 		}));
 
-		frm.set_query("difference_account", () => ({
+		frm.set_query("closing_stock_account", () => ({
 			filters: {
 				company: frm.doc.company,
-				account_type: "Cost of Goods Sold",
 				root_type: "Expense",
 				is_group: 0,
 			}
@@ -56,8 +63,8 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 			frappe.msgprint(__("Please set a Posting Date first."));
 			return;
 		}
-		if (!frm.doc.difference_account) {
-			frappe.msgprint(__("Please select a Difference Account (COGS)."));
+		if (!frm.doc.closing_stock_account) {
+			frappe.msgprint(__("Please select a Closing Stock Account (Income Statement)."));
 			return;
 		}
 
@@ -78,11 +85,15 @@ frappe.ui.form.on("Periodic Accounting Entry", {
 
 	company(frm) {
 		frm.set_value("accounts", []);
-		frm.set_value("difference_account", "");
+		frm.set_value("closing_stock_account", "");
 		frm.set_value("cost_center", "");
 	},
 
 	posting_date(frm) {
+		frm.set_value("accounts", []);
+	},
+
+	from_date(frm) {
 		frm.set_value("accounts", []);
 	},
 });

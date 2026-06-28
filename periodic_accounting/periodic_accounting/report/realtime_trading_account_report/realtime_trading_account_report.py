@@ -11,6 +11,37 @@ def execute(filters=None):
 	return columns, data
 
 
+def get_periodic_gl(filters):
+	"""
+	When the user supplies a periodic_entry_account filter, query GL entries on that
+	COGS account to surface the GL-posted opening and closing stock amounts from
+	submitted Periodic Accounting Entries.  Returns (opening_dr, opening_cr,
+	period_dr, period_cr) — all floats — or None when the filter is absent.
+	"""
+	account = filters.get("periodic_entry_account")
+	if not account:
+		return None
+
+	opening = frappe.db.sql(
+		"""SELECT COALESCE(SUM(debit),0) AS dr, COALESCE(SUM(credit),0) AS cr
+		   FROM `tabGL Entry`
+		   WHERE account = %(account)s AND company = %(company)s
+		     AND posting_date < %(from_date)s AND is_cancelled = 0""",
+		{**filters, "account": account}, as_dict=True,
+	)
+	period = frappe.db.sql(
+		"""SELECT COALESCE(SUM(debit),0) AS dr, COALESCE(SUM(credit),0) AS cr
+		   FROM `tabGL Entry`
+		   WHERE account = %(account)s AND company = %(company)s
+		     AND posting_date BETWEEN %(from_date)s AND %(to_date)s
+		     AND is_cancelled = 0""",
+		{**filters, "account": account}, as_dict=True,
+	)
+	o = opening[0] if opening else frappe._dict(dr=0, cr=0)
+	p = period[0]  if period  else frappe._dict(dr=0, cr=0)
+	return flt(o.dr), flt(o.cr), flt(p.dr), flt(p.cr)
+
+
 def get_columns():
 	return [
 		{"label": _("Particulars"),  "fieldname": "particulars", "fieldtype": "Data",     "width": 340},
@@ -81,21 +112,22 @@ def get_closing_stock_live(filters):
 
 
 def get_purchases(filters):
-	"""GL debits on COGS / Valuation accounts from Purchase Invoices & Receipts"""
+	"""Stock value from SLE — works regardless of which GL account PI posts to."""
 	conditions = """
-		gle.company = %(company)s
-		AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
-		AND gle.voucher_type IN ('Purchase Invoice', 'Purchase Receipt')
-		AND gle.is_cancelled = 0
-		AND acc.root_type = 'Expense'
-		AND acc.account_type IN ('Cost of Goods Sold', 'Expenses Included In Valuation')
+		sle.company = %(company)s
+		AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+		AND sle.voucher_type IN ('Purchase Invoice', 'Purchase Receipt')
+		AND sle.is_cancelled = 0
 	"""
+	if filters.get("warehouse"):
+		conditions += " AND sle.warehouse = %(warehouse)s"
 	result = frappe.db.sql(
 		f"""SELECT
-			    COALESCE(SUM(gle.debit),  0) AS gross,
-			    COALESCE(SUM(gle.credit), 0) AS returns
-			FROM `tabGL Entry` gle
-			INNER JOIN `tabAccount` acc ON acc.name = gle.account
+			    COALESCE(SUM(CASE WHEN sle.stock_value_difference > 0
+			        THEN sle.stock_value_difference ELSE 0 END), 0) AS gross,
+			    COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0
+			        THEN sle.stock_value_difference ELSE 0 END)), 0) AS returns
+			FROM `tabStock Ledger Entry` sle
 			WHERE {conditions}""",
 		filters, as_dict=True,
 	)
@@ -163,7 +195,7 @@ def get_data(filters):
 	def spacer():
 		return row("", 0, 0)
 
-	return [
+	rows = [
 		# ── SALES ──────────────────────────────────────────────────────────
 		row("SALES", bold=True),
 		row("Gross Sales Revenue",
@@ -172,12 +204,12 @@ def get_data(filters):
 		row("Less: Sales Returns",
 		    debit=sal_returns, indent=1,
 		    link=_sales_reg(co, fd, td)),
-		row("Net Sales Revenue",
+		row("NET SALES REVENUE",
 		    credit=net_sales, bold=True),
 		spacer(),
 
-		# ── COST OF SALES ───────────────────────────────────────────────────
-		row("COST OF SALES", bold=True),
+		# ── COST OF GOODS SOLD ─────────────────────────────────────────────
+		row("COST OF GOODS SOLD", bold=True),
 		row("Opening Stock",
 		    debit=opening_stock, indent=1,
 		    link=_stock_bal(co, opening_date, wh)),
@@ -189,20 +221,45 @@ def get_data(filters):
 		    link=_pur_reg(co, fd, td)),
 		row("Net Purchases",
 		    debit=net_purchases, bold=True),
-		spacer(),
 		row("Goods Available for Sale",
 		    debit=opening_stock + net_purchases, indent=1),
-		row("Less: Closing Stock (Live)",
+		row("Less: Closing Stock",
 		    credit=closing_stock, indent=1,
 		    link=_stock_bal(co, td, wh)),
-		spacer(),
-
-		# ── COGS & GP ───────────────────────────────────────────────────────
-		row("COST OF GOODS SOLD",
+		row("NET COGS",
 		    debit=cogs, bold=True),
 		spacer(),
+
+		# ── GROSS PROFIT ───────────────────────────────────────────────────
 		row("GROSS PROFIT",
 		    debit=gross_profit  if gross_profit  < 0 else 0,
 		    credit=gross_profit if gross_profit >= 0 else 0,
 		    bold=True),
 	]
+
+	# ── GL RECONCILIATION (shown only when periodic_entry_account is set) ──
+	gl = get_periodic_gl(filters)
+	if gl is not None:
+		open_dr, open_cr, period_dr, period_cr = gl
+		# Net GL impact on the COGS account for the period:
+		#   Opening Stock JE  → Dr on COGS (cost side, increases COGS)
+		#   Closing Stock JE  → Cr on COGS (income side, reduces COGS)
+		gl_net = period_cr - period_dr - open_dr + open_cr
+		rows += [
+			spacer(),
+			row("PERIODIC ENTRY RECONCILIATION (GL)", bold=True),
+			row("Opening Stock — GL (Dr on COGS a/c before period)",
+			    debit=open_dr, credit=open_cr, indent=1),
+			row("Closing Stock — GL (Cr on COGS a/c during period)",
+			    debit=period_dr, credit=period_cr, indent=1),
+			row("Net GL Stock Impact (Closing − Opening)",
+			    debit=gl_net if gl_net < 0 else 0,
+			    credit=gl_net if gl_net >= 0 else 0,
+			    bold=True),
+			row("SLE Opening Stock (live — should match GL opening above)",
+			    debit=opening_stock, indent=1),
+			row("SLE Closing Stock (live — should match GL closing above)",
+			    credit=closing_stock, indent=1),
+		]
+
+	return rows

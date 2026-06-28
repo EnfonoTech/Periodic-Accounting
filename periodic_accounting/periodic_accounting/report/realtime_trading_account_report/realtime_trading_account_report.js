@@ -1,4 +1,19 @@
 frappe.query_reports["Realtime Trading Account Report"] = {
+	onload: function(report) {
+		report.page.add_inner_button(__("Create Periodic Entry"), function() {
+			let filters = report.get_values();
+			if (!filters.company) {
+				frappe.msgprint(__("Please select a Company in the report filters first."));
+				return;
+			}
+			frappe.new_doc("Periodic Accounting Entry", {
+				company:      filters.company,
+				from_date:    filters.from_date,
+				posting_date: filters.to_date || frappe.datetime.get_today()
+			});
+		}, __("Actions"));
+	},
+
 	filters: [
 		{
 			fieldname: "company",
@@ -27,6 +42,13 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 			label: __("Warehouse"),
 			fieldtype: "Link",
 			options: "Warehouse"
+		},
+		{
+			fieldname: "periodic_entry_account",
+			label: __("Periodic Entry Difference Account (COGS)"),
+			fieldtype: "Link",
+			options: "Account",
+			description: __("Optional — set to show GL-based Opening / Closing Stock from posted Periodic Accounting Entries")
 		}
 	],
 

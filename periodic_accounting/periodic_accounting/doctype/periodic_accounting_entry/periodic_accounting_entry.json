@@ -8,15 +8,17 @@
  "field_order": [
   "company",
   "posting_date",
+  "from_date",
   "for_all_stock_accounts",
   "stock_account",
   "cost_center",
-  "difference_account",
+  "closing_stock_account",
   "section_break_calculated",
   "get_balance",
   "accounts",
   "section_break_links",
   "journal_entry",
+  "opening_stock_journal_entry",
   "amended_from",
   "remarks"
  ],
@@ -31,22 +33,30 @@
   {
    "fieldname": "posting_date",
    "fieldtype": "Date",
-   "label": "Posting Date",
+   "label": "Posting Date (Period End)",
    "reqd": 1,
    "default": "Today"
   },
   {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Date (Period Start)",
+   "description": "Set to auto-create an Opening Stock Journal Entry on this date, reversing the prior GL inventory balance into the Income Statement. Leave blank to skip."
+  },
+  {
    "fieldname": "for_all_stock_accounts",
    "fieldtype": "Check",
-   "label": "For All Stock Accounts",
-   "default": "1"
+   "label": "For All Stock / Asset Accounts",
+   "default": "1",
+   "description": "When checked, picks every account with account_type = Stock under this company. Uncheck to target a single account."
   },
   {
    "fieldname": "stock_account",
    "fieldtype": "Link",
-   "label": "Stock Account",
+   "label": "Stock-in-Hand Account (Balance Sheet)",
    "options": "Account",
-   "depends_on": "eval:!doc.for_all_stock_accounts"
+   "depends_on": "eval:!doc.for_all_stock_accounts",
+   "description": "Asset account that holds the recognised closing stock value. This account must NOT be used as a purchase expense account — purchases should flow to a Purchases (Expense) account."
   },
   {
    "fieldname": "cost_center",
@@ -56,11 +66,12 @@
    "description": "Optional. Stamped on every Journal Entry row for P&L attribution."
   },
   {
-   "fieldname": "difference_account",
+   "fieldname": "closing_stock_account",
    "fieldtype": "Link",
-   "label": "Difference Account (COGS)",
+   "label": "Periodic Entry Difference Account (COGS)",
    "options": "Account",
-   "reqd": 1
+   "reqd": 1,
+   "description": "Cost of Goods Sold account that absorbs the periodic stock difference — credited when closing stock rises (reduces COGS), debited when it falls (increases COGS). Must be an Expense / COGS type account."
   },
   {
    "fieldname": "section_break_calculated",
@@ -85,7 +96,14 @@
   {
    "fieldname": "journal_entry",
    "fieldtype": "Link",
-   "label": "Journal Entry",
+   "label": "Closing Stock Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "opening_stock_journal_entry",
+   "fieldtype": "Link",
+   "label": "Opening Stock Journal Entry",
    "options": "Journal Entry",
    "read_only": 1
   },
