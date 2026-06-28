@@ -45,27 +45,62 @@ class PeriodicAccountingEntry(Document):
 	@frappe.whitelist()
 	def get_balance(self):
 		"""
-		Reads tabBin (live stock value) vs GL Account balance via ERPNext's
-		get_stock_and_account_balance — which automatically maps each stock account
-		to its linked warehouses when multiple stock accounts exist.
-		Auto-populates the accounts child table.
+		Generates the traditional periodic inventory closing entry:
+		  Cr  Purchases accounts  — close out purchases expense for the period
+		  Dr  Inventory account   — record closing stock on the Balance Sheet
+		  Dr  Periodic Entry Diff — actual Net COGS (balancing figure)
+
+		Formula: COGS = Purchases (GL) - Net Inventory Change
+		         Net Inventory Change = Closing Stock (Bin) - Prior Inventory GL (adjusted for opening JE)
 		"""
 		self.validate_company()
 
 		stock_accounts = self.get_stock_accounts()
 		self.set("accounts", [])
 		log_lines = []
-		total_difference = 0
+
+		period_start = self.from_date if self.from_date else "1900-01-01"
+
+		# ── 1. Purchases from GL for the period ──────────────────────────────
+		# Captures all inbound stock costs on Expense accounts:
+		#   Purchase Invoice  — local (company currency) and import (foreign currency, GL in base)
+		#                       Negative net = purchase returns (Cr > Dr), handled by debit - credit
+		#   Landed Cost Voucher — freight, customs duty, other landed costs allocated to items
+		#                         These raise the Bin/SLE valuation but post to separate expense accounts
+		purchase_rows = frappe.db.sql(
+			"""SELECT gle.account,
+			          COALESCE(SUM(gle.debit - gle.credit), 0) AS amount
+			   FROM `tabGL Entry` gle
+			   INNER JOIN `tabAccount` acc ON acc.name = gle.account
+			   WHERE gle.company = %s
+			     AND gle.posting_date BETWEEN %s AND %s
+			     AND gle.voucher_type IN (
+			         'Purchase Invoice',
+			         'Purchase Receipt',
+			         'Landed Cost Voucher'
+			     )
+			     AND acc.root_type = 'Expense'
+			     AND gle.is_cancelled = 0
+			   GROUP BY gle.account
+			   HAVING COALESCE(SUM(gle.debit - gle.credit), 0) != 0""",
+			(self.company, period_start, self.posting_date),
+			as_dict=True,
+		)
+		total_purchases = sum(flt(r.amount) for r in purchase_rows)
+		log_lines.append(f"Purchases (GL, {period_start} → {self.posting_date}): {total_purchases:.3f}")
+
+		# ── 2. Net inventory change per stock account ─────────────────────────
+		# account_bal is adjusted for the opening-stock JE that will zero out the
+		# prior-period GL balance when from_date is set (same logic as before).
+		inventory_rows = []
+		total_net_change = 0.0
 
 		for account in stock_accounts:
-			account_bal, stock_bal, _wh = get_stock_and_account_balance(
+			account_bal_raw, stock_bal, _wh = get_stock_and_account_balance(
 				account, self.posting_date, self.company
 			)
+			account_bal = flt(account_bal_raw)
 
-			# When from_date is set, the Opening Stock JE will zero out the GL balance
-			# for this account on from_date.  The Closing JE therefore needs to cover
-			# the FULL current stock value — not just the incremental change — so we
-			# subtract the prior GL balance from account_bal before computing difference.
 			if self.from_date:
 				result = frappe.db.sql(
 					"""SELECT COALESCE(SUM(debit - credit), 0) AS bal
@@ -74,73 +109,86 @@ class PeriodicAccountingEntry(Document):
 					(account, self.from_date), as_dict=True,
 				)
 				opening_gl = flt(result[0].bal) if result else 0.0
-				account_bal = flt(account_bal - opening_gl, 3)
+				account_bal = flt(account_bal_raw - opening_gl, 3)
 
-			# positive → stock > GL: stock in (Dr Inventory / Cr COGS)
-			# negative → stock < GL: stock out (Dr COGS / Cr Inventory)
-			difference = flt(stock_bal - account_bal, 3)
+			net_change = flt(stock_bal - account_bal, 3)
+			total_net_change += net_change
 
 			log_lines.append(
-				f"{account}: GL={account_bal:.3f} | "
-				f"Stock Reg (tabBin)={stock_bal:.3f} | Diff={difference:.3f}"
+				f"{account}: GL(adj)={account_bal:.3f} | Bin={stock_bal:.3f} | ΔInventory={net_change:.3f}"
 			)
 
-			if difference == 0:
-				frappe.msgprint(
-					_("No difference found for {0} — skipping").format(frappe.bold(account)),
-					alert=True,
-				)
+			if net_change == 0:
 				continue
 
-			total_difference += difference
 			account_name = frappe.db.get_value("Account", account, "account_name")
+			inventory_rows.append({
+				"account": account,
+				"account_name": account_name,
+				"debit": net_change if net_change > 0 else 0,
+				"credit": abs(net_change) if net_change < 0 else 0,
+				"remarks": (
+					f"Closing Stock (Balance Sheet) as at {self.posting_date} | "
+					f"Bin: {stock_bal:.3f} | GL (period-adj): {account_bal:.3f}"
+				),
+			})
 
-			self.append(
-				"accounts",
-				{
-					"account": account,
-					"account_name": account_name,
-					"debit": difference if difference > 0 else 0,
-					"credit": abs(difference) if difference < 0 else 0,
-					"remarks": (
-						f"Inventory (Balance Sheet) periodic entry as at {self.posting_date} | "
-						f"GL: {account_bal:.3f} | Stock Reg: {stock_bal:.3f}"
-					),
-				},
-			)
+		# ── 3. COGS = Purchases − Net Inventory Change ────────────────────────
+		cogs = flt(total_purchases - total_net_change, 3)
+		log_lines.append(f"Net Inventory Change: {total_net_change:.3f}")
+		log_lines.append(f"Net COGS            : {cogs:.3f}")
 
-			closing_stock_account_name = frappe.db.get_value(
-				"Account", self.closing_stock_account, "account_name"
-			)
+		# ── 4. Append rows in accountant's order: Purchases → Inventory → COGS ─
+		for r in purchase_rows:
+			amount = flt(r.amount, 3)
+			account_name = frappe.db.get_value("Account", r.account, "account_name")
+			self.append("accounts", {
+				"account": r.account,
+				"account_name": account_name,
+				"debit": 0 if amount > 0 else abs(amount),
+				"credit": amount if amount > 0 else 0,
+				"remarks": f"Close Purchases to Trading Account | {period_start} → {self.posting_date}",
+			})
 
-			self.append(
-				"accounts",
-				{
-					"account": self.closing_stock_account,
-					"account_name": closing_stock_account_name,
-					"debit": abs(difference) if difference < 0 else 0,
-					"credit": difference if difference > 0 else 0,
-					"remarks": f"Closing Stock (Income Statement) offset for {account_name}",
-				},
-			)
+		for row in inventory_rows:
+			self.append("accounts", row)
+
+		if cogs != 0:
+			cogs_name = frappe.db.get_value("Account", self.closing_stock_account, "account_name")
+			self.append("accounts", {
+				"account": self.closing_stock_account,
+				"account_name": cogs_name,
+				"debit": cogs if cogs > 0 else 0,
+				"credit": abs(cogs) if cogs < 0 else 0,
+				"remarks": f"Net COGS for period ending {self.posting_date}",
+			})
 
 		self.remarks = (
 			f"Periodic Accounting Entry — {self.posting_date}\n"
 			+ "\n".join(log_lines)
-			+ f"\n\nTotal Net Difference: {total_difference:.3f}"
 		)
 
-		if total_difference == 0:
-			frappe.msgprint(
-				_("Stock register matches GL perfectly. No entry needed."),
-				indicator="green",
+		# Sanity check
+		total_dr = sum(flt(r.debit) for r in self.accounts)
+		total_cr = sum(flt(r.credit) for r in self.accounts)
+		if abs(total_dr - total_cr) > 0.01:
+			frappe.throw(
+				_(f"Entry does not balance: Dr {total_dr:.3f} ≠ Cr {total_cr:.3f}. "
+				  "Please check purchases GL and stock accounts.")
 			)
+
+		if not self.accounts:
+			frappe.msgprint(_("No purchases or stock movement found for this period. Nothing to post."), indicator="orange")
 		else:
 			frappe.msgprint(
 				_(
-					"Balance calculated. Net difference: {0}. "
-					"Review the accounts table and Submit to post the Journal Entry."
-				).format(frappe.bold(f"{total_difference:.3f}")),
+					"Balance calculated. Purchases: {0} | Closing Stock: {1} | Net COGS: {2}. "
+					"Review the accounts table and Submit."
+				).format(
+					frappe.bold(f"{total_purchases:.3f}"),
+					frappe.bold(f"{total_net_change:.3f}"),
+					frappe.bold(f"{cogs:.3f}"),
+				),
 				indicator="blue",
 			)
 
@@ -307,26 +355,15 @@ class PeriodicAccountingEntry(Document):
 
 	def get_stock_accounts(self):
 		if self.for_all_stock_accounts:
-			# Include every non-group Asset account typed as Stock.
-			# Also pick up accounts that are linked to at least one warehouse
-			# but may not carry the "Stock" account_type label explicitly.
-			stock_typed = frappe.get_all(
-				"Account",
-				filters={
-					"company": self.company,
-					"root_type": "Asset",
-					"account_type": "Stock",
-					"is_group": 0,
-				},
-				pluck="name",
-			)
-			# Accounts linked to a warehouse but missing the account_type tag
-			wh_linked = frappe.db.sql_list("""
+			# Only include accounts that have at least one warehouse mapped to them.
+			# get_stock_and_account_balance() derives Bin value from warehouse→account links,
+			# so stock-typed accounts with no warehouse (e.g. Stock In Transit holding account)
+			# would return a fallback company-total Bin and cause double-counting.
+			return frappe.db.sql_list("""
 				SELECT DISTINCT w.account
 				FROM `tabWarehouse` w
 				WHERE w.company = %s AND w.account IS NOT NULL AND w.account != ''
 			""", self.company)
-			return list({*stock_typed, *wh_linked})
 		return [self.stock_account]
 
 	def create_journal_entry(self):

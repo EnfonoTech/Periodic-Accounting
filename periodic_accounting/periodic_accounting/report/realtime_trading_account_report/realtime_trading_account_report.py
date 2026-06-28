@@ -112,11 +112,21 @@ def get_closing_stock_live(filters):
 
 
 def get_purchases(filters):
-	"""Stock value from SLE — works regardless of which GL account PI posts to."""
+	"""
+	Stock value inflows from SLE for the period:
+	  - Purchase Invoice / Purchase Receipt  (local + import; returns = negative SLE)
+	  - Landed Cost Voucher                  (freight, customs, other landed costs)
+	Gross  = sum of positive SLE changes  (purchases + LCV allocations)
+	Returns = abs sum of negative SLE changes (purchase returns / debit notes)
+	"""
 	conditions = """
 		sle.company = %(company)s
 		AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
-		AND sle.voucher_type IN ('Purchase Invoice', 'Purchase Receipt')
+		AND sle.voucher_type IN (
+		    'Purchase Invoice',
+		    'Purchase Receipt',
+		    'Landed Cost Voucher'
+		)
 		AND sle.is_cancelled = 0
 	"""
 	if filters.get("warehouse"):
@@ -241,25 +251,28 @@ def get_data(filters):
 	gl = get_periodic_gl(filters)
 	if gl is not None:
 		open_dr, open_cr, period_dr, period_cr = gl
-		# Net GL impact on the COGS account for the period:
-		#   Opening Stock JE  → Dr on COGS (cost side, increases COGS)
-		#   Closing Stock JE  → Cr on COGS (income side, reduces COGS)
-		gl_net = period_cr - period_dr - open_dr + open_cr
+		# New accountant's approach:
+		#   Opening Stock JE → Dr on COGS a/c (opening stock cost, at period start)
+		#   Closing JE       → Dr on COGS a/c (net COGS), Cr on Purchases a/c
+		# Net COGS on Periodic Entry Diff = period_dr (COGS this period)
+		# Opening stock already expensed   = open_dr (prior period closing stock)
+		gl_cogs = flt(period_dr)
+		gl_opening = flt(open_dr)
 		rows += [
 			spacer(),
 			row("PERIODIC ENTRY RECONCILIATION (GL)", bold=True),
-			row("Opening Stock — GL (Dr on COGS a/c before period)",
-			    debit=open_dr, credit=open_cr, indent=1),
-			row("Closing Stock — GL (Cr on COGS a/c during period)",
-			    debit=period_dr, credit=period_cr, indent=1),
-			row("Net GL Stock Impact (Closing − Opening)",
-			    debit=gl_net if gl_net < 0 else 0,
-			    credit=gl_net if gl_net >= 0 else 0,
-			    bold=True),
-			row("SLE Opening Stock (live — should match GL opening above)",
+			row("Opening Stock — GL (Dr on COGS a/c before period start)",
+			    debit=gl_opening, indent=1),
+			row("Net COGS — GL (Dr on COGS a/c during period)",
+			    debit=gl_cogs, indent=1),
+			row("Total Cost (Opening + COGS) — GL",
+			    debit=gl_opening + gl_cogs, bold=True),
+			row("SLE Opening Stock (should match GL opening above)",
 			    debit=opening_stock, indent=1),
-			row("SLE Closing Stock (live — should match GL closing above)",
+			row("SLE Closing Stock / Bin (for reference)",
 			    credit=closing_stock, indent=1),
+			row("SLE Net COGS (Opening + Purchases − Closing)",
+			    debit=cogs, bold=True),
 		]
 
 	return rows
