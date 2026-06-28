@@ -83,7 +83,8 @@ app_license = "mit"
 # ------------
 
 # before_install = "periodic_accounting.install.before_install"
-# after_install = "periodic_accounting.install.after_install"
+after_install = "periodic_accounting.install.after_install"
+after_migrate = "periodic_accounting.install.after_migrate"
 
 # Uninstallation
 # ------------
