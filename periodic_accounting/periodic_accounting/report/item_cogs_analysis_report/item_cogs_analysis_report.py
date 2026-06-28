@@ -8,6 +8,11 @@ If non-zero → cancelled / unbalanced transaction needs investigation.
 import frappe
 from frappe import _
 from frappe.utils import flt, getdate, today
+from urllib.parse import urlencode
+
+
+def _url(report, params):
+    return f"/app/query-report/{report.replace(' ', '%20')}?{urlencode(params)}"
 
 
 def execute(filters=None):
@@ -347,6 +352,9 @@ def get_data(filters):
         if hide_zero and variance == 0 and op == 0 and cl == 0 and sales == 0:
             continue
 
+        sle_params = {"company": co, "from_date": fd, "to_date": td, "item_code": code}
+        if wh: sle_params["warehouse"] = wh
+
         row = {
             "item_code":     code,
             "item_name":     m.item_name or code,
@@ -366,6 +374,8 @@ def get_data(filters):
             "variance":      variance,
             "gl_cogs":       gl_cogs,
             "cogs_diff":     cogs_diff,
+            "_sle_link":     _url("Stock Ledger", sle_params),
+            "_gl_link":      _url("General Ledger", {"company": co, "from_date": fd, "to_date": td}),
         }
         rows.append(row)
 

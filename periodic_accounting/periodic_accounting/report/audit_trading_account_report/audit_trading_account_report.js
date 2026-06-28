@@ -104,7 +104,12 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			if (fn === "particulars") {
 				const icon  = dirty ? "❌" : "✅";
 				const color = dirty ? "#b71c1c" : "#2e7d32";
-				return `${icon} <span style="color:${color};font-weight:600">${value}</span>`;
+				const label = `${icon} <span style="color:${color};font-weight:600">${value}</span>`;
+				if (dirty && data.link) {
+					return `<a href="${data.link}" title="Click to investigate"
+					           style="text-decoration:none">${label}</a>`;
+				}
+				return label;
 			}
 			if (fn === "debit" || fn === "credit") {
 				if (!dirty) return `<span style="color:#2e7d32;font-weight:600">${value}</span>`;
@@ -114,6 +119,12 @@ frappe.query_reports["Audit Trading Account Report"] = {
 
 		// ── Empty divider rows ────────────────────────────────────────────────
 		if (rt === "divider") return "";
+
+		// ── Clickable particulars (any detail row with a link) ─────────────────
+		if (fn === "particulars" && data.link) {
+			return `<a href="${data.link}" title="Click to view detail"
+			           style="color:inherit;text-decoration:underline dotted">${value}</a>`;
+		}
 
 		return value;
 	},

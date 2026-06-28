@@ -82,8 +82,11 @@ frappe.query_reports["Item COGS Analysis Report"] = {
 			if (Math.abs(v) < 0.005) {
 				return `<span style="color:#2e7d32;font-weight:700">✓ ${value}</span>`;
 			}
-			return `<span style="background:#c62828;color:#fff;padding:2px 8px;` +
-			       `border-radius:4px;font-weight:700">⚠ ${value}</span>`;
+			const badge = `<span style="background:#c62828;color:#fff;padding:2px 8px;` +
+			              `border-radius:4px;font-weight:700">⚠ ${value}</span>`;
+			const link  = data._sle_link || "#";
+			return `<a href="${link}" title="Open Stock Ledger for this item to find unbalanced entries"
+			           style="text-decoration:none">${badge}</a>`;
 		}
 
 		// ── COGS Difference column ────────────────────────────────────────────
@@ -92,8 +95,11 @@ frappe.query_reports["Item COGS Analysis Report"] = {
 			if (Math.abs(v) < 0.005) {
 				return `<span style="color:#2e7d32;font-weight:700">✓ ${value}</span>`;
 			}
-			return `<span style="background:#e65100;color:#fff;padding:2px 8px;` +
-			       `border-radius:4px;font-weight:700">△ ${value}</span>`;
+			const badge = `<span style="background:#e65100;color:#fff;padding:2px 8px;` +
+			              `border-radius:4px;font-weight:700">△ ${value}</span>`;
+			const link  = data._gl_link || "#";
+			return `<a href="${link}" title="Open General Ledger to compare GL COGS vs SLE for this period"
+			           style="text-decoration:none">${badge}</a>`;
 		}
 
 		// ── Sales COGS — key column: accent highlight ─────────────────────────

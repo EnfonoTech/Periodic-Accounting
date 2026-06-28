@@ -375,12 +375,14 @@ def build_main(co, fd, td, wh, cc):
         {**R("COGS Variance  ← must be zero",
              debit =cogs_var if cogs_var >  0.005 else 0,
              credit=abs(cogs_var) if cogs_var < -0.005 else 0,
-             bold=True, indent=1, row_type="variance"),
+             bold=True, indent=1, row_type="variance",
+             link=_url("Item COGS Analysis Report", {"company": co, "from_date": fd, "to_date": td})),
          "_is_variance": True, "_clean": abs(cogs_var) <= 0.005},
         {**R("Bin vs Stock Account GL  ← must be zero",
              debit =bin_gl_var if bin_gl_var >  0.005 else 0,
              credit=abs(bin_gl_var) if bin_gl_var < -0.005 else 0,
-             bold=True, indent=1, row_type="variance"),
+             bold=True, indent=1, row_type="variance",
+             link=_url("Stock Balance", {"company": co, "date": td})),
          "_is_variance": True, "_clean": abs(bin_gl_var) <= 0.005},
     ]
 
