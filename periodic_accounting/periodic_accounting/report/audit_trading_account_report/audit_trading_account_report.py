@@ -85,10 +85,43 @@ def _sle(company, warehouse, extra_conds, extra_params, select):
 
 
 def opening_stock(co, fd, wh=None):
-    r = _sle(co, wh,
-             ["sle.posting_date<%s"],
-             [fd],
-             "COALESCE(SUM(sle.stock_value_difference),0) AS v")
+    """
+    Cumulative SLE before from_date PLUS any Stock Reconciliation (purpose=Opening Stock)
+    posted within the period — those represent opening balance loads, not period adjustments.
+    """
+    j, c, p = _wh_base(co, wh)
+    where = " AND ".join(c)
+    r = frappe.db.sql(f"""
+        SELECT COALESCE(SUM(sle.stock_value_difference),0) AS v
+        FROM `tabStock Ledger Entry` sle {j}
+        LEFT JOIN `tabStock Reconciliation` sr
+            ON sr.name=sle.voucher_no AND sle.voucher_type='Stock Reconciliation'
+        WHERE {where}
+          AND (sle.posting_date < %s
+               OR (sle.voucher_type='Stock Reconciliation'
+                   AND COALESCE(sr.purpose,'')='Opening Stock'))
+    """, p + [fd], as_dict=True)
+    return flt(r[0].v) if r else 0.0
+
+
+def stock_recon_adjustment(co, fd, td, wh=None):
+    """
+    Net Stock Reconciliation (purpose != Opening Stock) within the period.
+    Positive = excess found; Negative = shortage / write-off.
+    Opening Stock purpose reconciliations are excluded — they belong in opening_stock().
+    """
+    j, c, p = _wh_base(co, wh)
+    where = " AND ".join(c)
+    r = frappe.db.sql(f"""
+        SELECT COALESCE(SUM(sle.stock_value_difference),0) AS v
+        FROM `tabStock Ledger Entry` sle {j}
+        LEFT JOIN `tabStock Reconciliation` sr
+            ON sr.name=sle.voucher_no AND sle.voucher_type='Stock Reconciliation'
+        WHERE {where}
+          AND sle.posting_date BETWEEN %s AND %s
+          AND sle.voucher_type='Stock Reconciliation'
+          AND COALESCE(sr.purpose,'')!='Opening Stock'
+    """, p + [fd, td], as_dict=True)
     return flt(r[0].v) if r else 0.0
 
 
@@ -320,10 +353,11 @@ def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
+    recon   = stock_recon_adjustment(co, fd, td, wh)
     loc, imp, lcv, pi_adj, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
     net_pur      = loc + imp + lcv + pi_adj - pur_ret
     goods_avail  = op + net_pur
-    formula_cogs = goods_avail - cl
+    formula_cogs = goods_avail + recon - cl
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gl_cogs      = gl_cogs_total(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
@@ -361,7 +395,16 @@ def build_main(co, fd, td, wh, cc):
     rows += [
         R("Net Purchases",            debit=net_pur,     bold=True, indent=1, row_type="subtotal"),
         R("Goods Available for Sale", debit=goods_avail, indent=1),
-        R("Less: Closing Stock",      credit=cl,         indent=1, link=_sb(co, td, wh)),
+    ]
+
+    if recon:
+        if recon > 0:
+            rows.append(R("Stock Reconciliation  (Excess Found)",   debit=recon,        indent=1, link=_sl(co, fd, td, wh)))
+        else:
+            rows.append(R("Stock Reconciliation  (Shortage / Write-off)", credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
+
+    rows += [
+        R("Less: Closing Stock",      credit=cl,          indent=1, link=_sb(co, td, wh)),
         R("NET COGS",                 debit=formula_cogs, bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT",

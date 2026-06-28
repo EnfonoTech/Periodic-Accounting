@@ -43,10 +43,12 @@ def get_columns():
         {**C, "label": _("Mfg / Issue Out"),  "fieldname": "mfg_out"},
         {**C, "label": _("Sales COGS"),       "fieldname": "sales_cogs"},
         {**C, "label": _("Sales Ret In"),     "fieldname": "sales_ret_in"},
+        {**C, "label": _("Stock Recon"),      "fieldname": "stock_recon",
+         "description": "Stock Reconciliation adjustments (+ excess / − shortage)"},
         {**C, "label": _("Closing"),          "fieldname": "closing"},
         {**C, "label": _("Variance ✓"),       "fieldname": "variance",
          "width": 130,
-         "description": "Opening + Inflows − Outflows − Closing; must be 0"},
+         "description": "Opening + Inflows + Stock Recon − Outflows − Closing; must be 0"},
         {**C, "label": _("GL COGS"),          "fieldname": "gl_cogs"},
         {**C, "label": _("COGS Diff"),        "fieldname": "cogs_diff",
          "width": 130,
@@ -95,9 +97,10 @@ def get_all_movements(co, fd, td, wh, ig, item, cc_vnos):
     company_cur = frappe.db.get_value("Company", co, "default_currency") or ""
 
     # IMPORTANT: MySQL binds %s in strict text order (SELECT before WHERE).
-    # All CASE WHEN params (23) must come BEFORE the WHERE clause params.
+    # All CASE WHEN params must come BEFORE the WHERE clause params.
+    # Opening uses 3 params: fd (before-period), fd+td (in-period Opening Stock recon)
     select_params = (
-        [fd]                    # opening < fd
+        [fd, fd, td]            # opening: < fd OR (BETWEEN fd AND td AND purpose=Opening Stock)
         + [fd, td, company_cur] # local_pr BETWEEN + currency =
         + [fd, td, company_cur] # import_pr BETWEEN + currency !=
         + [fd, td]              # lcv BETWEEN
@@ -108,8 +111,9 @@ def get_all_movements(co, fd, td, wh, ig, item, cc_vnos):
         + [fd, td]              # mfg_out BETWEEN
         + [fd, td]              # sales_cogs BETWEEN
         + [fd, td]              # sales_ret_in BETWEEN
+        + [fd, td]              # stock_recon BETWEEN (non-Opening Stock purpose)
     )
-    where_params = p + [td] + ig_p + item_p + vno_p   # company, posting_date<=td, optional filters
+    where_params = p + [td] + ig_p + item_p + vno_p
 
     rows = frappe.db.sql(f"""
         SELECT
@@ -117,8 +121,12 @@ def get_all_movements(co, fd, td, wh, ig, item, cc_vnos):
             itm.item_name,
             itm.item_group,
 
-            /* Opening (before period) */
-            COALESCE(SUM(CASE WHEN sle.posting_date < %s
+            /* Opening: before period OR Stock Reconciliation (Opening Stock) within period */
+            COALESCE(SUM(CASE
+                WHEN sle.posting_date < %s
+                  OR (sle.posting_date BETWEEN %s AND %s
+                      AND sle.voucher_type='Stock Reconciliation'
+                      AND COALESCE(sr.purpose,'')='Opening Stock')
                 THEN sle.stock_value_difference ELSE 0 END), 0) AS opening,
 
             /* Local PR — non-return, company currency, positive svd */
@@ -197,7 +205,14 @@ def get_all_movements(co, fd, td, wh, ig, item, cc_vnos):
                 WHEN sle.posting_date BETWEEN %s AND %s
                  AND sle.voucher_type IN ('Sales Invoice','Delivery Note')
                  AND sle.stock_value_difference>0
-                THEN sle.stock_value_difference ELSE 0 END), 0) AS sales_ret_in
+                THEN sle.stock_value_difference ELSE 0 END), 0) AS sales_ret_in,
+
+            /* Stock Reconciliation (physical verification only; Opening Stock excluded) */
+            COALESCE(SUM(CASE
+                WHEN sle.posting_date BETWEEN %s AND %s
+                 AND sle.voucher_type='Stock Reconciliation'
+                 AND COALESCE(sr.purpose,'')!='Opening Stock'
+                THEN sle.stock_value_difference ELSE 0 END), 0) AS stock_recon
 
         FROM `tabStock Ledger Entry` sle
         {j}
@@ -208,6 +223,8 @@ def get_all_movements(co, fd, td, wh, ig, item, cc_vnos):
             ON pi.name=sle.voucher_no AND sle.voucher_type='Purchase Invoice'
         LEFT JOIN `tabStock Entry` se
             ON se.name=sle.voucher_no AND sle.voucher_type='Stock Entry'
+        LEFT JOIN `tabStock Reconciliation` sr
+            ON sr.name=sle.voucher_no AND sle.voucher_type='Stock Reconciliation'
 
         WHERE {base_where}
           AND sle.posting_date <= %s
@@ -324,29 +341,31 @@ def get_data(filters):
     rows   = []
     totals = {k: 0.0 for k in (
         "opening","local_pr","import_pr","lcv","pi_adj","pur_ret",
-        "t_in","t_out","mfg_out","sales_cogs","sales_ret_in",
+        "t_in","t_out","mfg_out","sales_cogs","sales_ret_in","stock_recon",
         "closing","variance","gl_cogs","cogs_diff",
     )}
 
     for m in movements:
         code = m.item_code
-        op       = flt(m.opening,       3)
-        local_pr = flt(m.local_pr,      3)
-        imp_pr   = flt(m.import_pr,     3)
-        lcv_v    = flt(m.lcv,           3)
-        pi_adj   = flt(m.pi_adj,        3)
-        pur_ret  = flt(m.pur_ret,       3)
-        t_in     = flt(m.t_in,          3)
-        t_out    = flt(m.t_out,         3)
-        mfg_out  = flt(m.mfg_out,       3)
-        sales    = flt(m.sales_cogs,    3)
-        s_ret    = flt(m.sales_ret_in,  3)
-        cl       = flt(closing_map.get(code, 0), 3)
-        gl_cogs  = flt(gl_cogs_map.get(code, 0), 3)
+        op        = flt(m.opening,       3)
+        local_pr  = flt(m.local_pr,      3)
+        imp_pr    = flt(m.import_pr,     3)
+        lcv_v     = flt(m.lcv,           3)
+        pi_adj    = flt(m.pi_adj,        3)
+        pur_ret   = flt(m.pur_ret,       3)
+        t_in      = flt(m.t_in,          3)
+        t_out     = flt(m.t_out,         3)
+        mfg_out   = flt(m.mfg_out,       3)
+        sales     = flt(m.sales_cogs,    3)
+        s_ret     = flt(m.sales_ret_in,  3)
+        stock_rec = flt(m.stock_recon,   3)
+        cl        = flt(closing_map.get(code, 0), 3)
+        gl_cogs   = flt(gl_cogs_map.get(code, 0), 3)
 
         total_in  = local_pr + imp_pr + lcv_v + pi_adj + s_ret + t_in
         total_out = pur_ret  + sales  + t_out + mfg_out
-        variance  = flt(op + total_in - total_out - cl, 3)
+        # stock_recon is signed: positive=excess (inflow), negative=shortage (outflow)
+        variance  = flt(op + total_in - total_out + stock_rec - cl, 3)
         cogs_diff = flt(sales - gl_cogs, 3)
 
         # Skip rows with no activity if "hide zero variance" is on
@@ -371,6 +390,7 @@ def get_data(filters):
             "mfg_out":       mfg_out,
             "sales_cogs":    sales,
             "sales_ret_in":  s_ret,
+            "stock_recon":   stock_rec,
             "closing":       cl,
             "variance":      variance,
             "gl_cogs":       gl_cogs,
