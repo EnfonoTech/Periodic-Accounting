@@ -47,18 +47,19 @@ frappe.query_reports["Periodic Balance Sheet"] = {
 	onload: function(report) {
 		function get_nav_params() {
 			return {
-				company:   report.get_filter_value("company"),
-				from_date: report.get_filter_value("from_date"),
-				to_date:   report.get_filter_value("to_date"),
-				warehouse: report.get_filter_value("warehouse") || undefined,
+				company:     report.get_filter_value("company"),
+				from_date:   report.get_filter_value("from_date"),
+				to_date:     report.get_filter_value("to_date"),
+				warehouse:   report.get_filter_value("warehouse")   || undefined,
 				cost_center: report.get_filter_value("cost_center") || undefined,
 			};
 		}
-		report.page.add_action_item(__("Trading Account"), function() {
+		const grp = __("Financial Statements");
+		report.page.add_inner_button(__("Trading Account"), function() {
 			frappe.set_route("query-report", "Realtime Trading Account Report", get_nav_params());
-		});
-		report.page.add_action_item(__("Gross & Net Profit"), function() {
+		}, grp);
+		report.page.add_inner_button(__("Gross & Net Profit"), function() {
 			frappe.set_route("query-report", "Periodic Gross and Net Profit", get_nav_params());
-		});
+		}, grp);
 	},
 };

@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from periodic_accounting.periodic_accounting.report.report_utils import (
     get_opening_stock,
     get_closing_stock,
-    get_gl_purchase_split,
+    get_purchase_split,
     get_stock_adjustments,
     get_sales,
 )
@@ -77,12 +77,12 @@ def get_data(filters):
 
     opening_stock                         = get_opening_stock(filters)
     closing_stock                         = get_closing_stock(filters)
-    pur                                   = get_gl_purchase_split(filters)
+    pur                                   = get_purchase_split(filters)
     stock_adjustments                     = get_stock_adjustments(filters)
     gross_sales, sal_returns, net_sales   = get_sales(filters)
 
     # Net Purchases = Local + Import + Landing Costs - Returns
-    net_purchases   = pur.local_pur + pur.import_pur + pur.local_lc + pur.import_lc - pur.returns
+    net_purchases   = pur.local_pur + pur.import_pur + pur.landing_cost - pur.returns
     goods_available = opening_stock + net_purchases + stock_adjustments
     cogs            = goods_available - closing_stock
     gross_profit    = net_sales - cogs
@@ -125,7 +125,7 @@ def get_data(filters):
     ]
 
     # ── Purchases breakdown ────────────────────────────────────────────────────
-    rows.append(R("Purchases  ← GL", bold=True, indent=1))
+    rows.append(R("Purchases  ← SLE", bold=True, indent=1))
     if pur.local_pur:
         rows.append(R("Local Purchases",
                       debit=pur.local_pur, indent=2,
@@ -134,13 +134,9 @@ def get_data(filters):
         rows.append(R("Import Purchases",
                       debit=pur.import_pur, indent=2,
                       link=_purchase_entries(co, fd, td, wh)))
-    if pur.import_lc:
-        rows.append(R("Import Landing Cost",
-                      debit=pur.import_lc, indent=2,
-                      link=_purchase_entries(co, fd, td, wh)))
-    if pur.local_lc:
-        rows.append(R("Local Landing Cost",
-                      debit=pur.local_lc, indent=2,
+    if pur.landing_cost:
+        rows.append(R("Landing Costs (LCV)",
+                      debit=pur.landing_cost, indent=2,
                       link=_purchase_entries(co, fd, td, wh)))
     if pur.returns:
         rows.append(R("Less: Purchase Returns",

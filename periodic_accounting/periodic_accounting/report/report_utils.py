@@ -161,84 +161,76 @@ def get_stock_adjustments(filters):
     return flt(result[0].val) if result else 0.0
 
 
-# ── Purchases (GL — local / import classification) ───────────────────────────
+# ── Purchases (SLE — local / import by currency) ─────────────────────────────
 
-def get_gl_purchase_split(filters):
+def get_purchase_split(filters):
     """
-    Purchase breakdown from GL Entry using the chart-of-accounts classification.
+    Purchase breakdown from SLE — always consistent with Purchase Stock Entries.
 
-    In non-perpetual inventory:
-      Purchase Invoice → GL  (Dr Purchase Account, Cr AP)
-      Landed Cost Voucher → GL  (Dr Landing Cost Account, Cr Supplier/Payable)
+    Local vs Import: if the source voucher (Purchase Receipt or Purchase Invoice
+    with update_stock) is in a currency other than the company's default currency,
+    it is classified as an Import purchase; otherwise Local.
 
-    The chart of accounts already has explicit Local Purchases / Import Purchases
-    accounts and Import Landing Cost / Local Landing Cost sub-groups, so name-
-    matching gives a reliable split without any custom fields.
+    Landed Cost Vouchers (always in company currency at SLE level) are reported
+    separately as 'landing_cost' regardless of the underlying receipt currency.
 
-    Returns a frappe._dict with keys:
-      local_pur, import_pur, local_lc, import_lc, returns, total
+    Returns frappe._dict:
+        local_pur, import_pur, landing_cost, returns, total
     """
-    co = filters.get("company") or filters.company
-    fd = str(filters.from_date)
-    td = str(filters.to_date)
-    cc = filters.get("cost_center")
-    cc_clause = " AND gle.cost_center = %s" if cc else ""
-    cc_param  = [cc] if cc else []
+    co          = filters.get("company") or filters.company
+    fd          = str(filters.from_date)
+    td          = str(filters.to_date)
+    co_currency = frappe.db.get_value("Company", co, "default_currency") or ""
+
+    join, wh_clause, wh_params = sle_warehouse_clause(filters)
 
     rows = frappe.db.sql(
         f"""SELECT
-                LOWER(acc.account_name)                      AS aname,
-                LOWER(COALESCE(par.account_name, ''))        AS pname,
-                COALESCE(SUM(gle.debit),  0)                 AS debit,
-                COALESCE(SUM(gle.credit), 0)                 AS credit
-            FROM `tabGL Entry` gle
-            JOIN  `tabAccount` acc ON acc.name = gle.account
-            LEFT JOIN `tabAccount` par ON par.name = acc.parent_account
-            WHERE gle.company = %s
-              AND gle.posting_date BETWEEN %s AND %s
-              AND gle.is_cancelled = 0
-              AND gle.voucher_type IN (
+                sle.voucher_type,
+                COALESCE(pr.currency, pi.currency, %s) AS voucher_currency,
+                COALESCE(SUM(CASE WHEN sle.stock_value_difference > 0
+                             THEN sle.stock_value_difference ELSE 0 END), 0) AS gross,
+                COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0
+                             THEN sle.stock_value_difference ELSE 0 END)), 0) AS ret
+            FROM `tabStock Ledger Entry` sle {join}
+            LEFT JOIN `tabPurchase Receipt` pr
+                ON pr.name = sle.voucher_no AND sle.voucher_type = 'Purchase Receipt'
+            LEFT JOIN `tabPurchase Invoice` pi
+                ON pi.name = sle.voucher_no AND sle.voucher_type = 'Purchase Invoice'
+            WHERE {wh_clause}
+              AND sle.posting_date BETWEEN %s AND %s
+              AND sle.voucher_type IN (
                   'Purchase Invoice', 'Purchase Receipt', 'Landed Cost Voucher'
               )
-              AND acc.root_type = 'Expense'
-              AND acc.account_type IN (
-                  'Cost of Goods Sold', 'Expenses Included In Valuation'
-              )
-              {cc_clause}
-            GROUP BY acc.account_name, par.account_name""",
-        [co, fd, td] + cc_param,
+              AND sle.is_cancelled = 0
+            GROUP BY sle.voucher_type, voucher_currency""",
+        [co_currency] + wh_params + [fd, td],
         as_dict=True,
     )
 
-    local_pur = import_pur = local_lc = import_lc = returns = 0.0
+    local_pur = import_pur = landing_cost = returns = 0.0
 
     for r in rows:
-        n = r.aname   # lowercase account name
-        p = r.pname   # lowercase parent account name
-        d = flt(r.debit)
-        c = flt(r.credit)
+        g   = flt(r.gross)
+        ret = flt(r.ret)
+        is_foreign = (r.voucher_currency or co_currency) != co_currency
 
-        if 'local purchase' in n:
-            local_pur  += d
-            returns    += c
-        elif 'import purchase' in n:
-            import_pur += d
-            returns    += c
-        elif 'local landing' in p or 'local landing' in n:
-            local_lc   += d
-        elif 'import landing' in p or 'import landing' in n:
-            import_lc  += d
-        # Production Expenses / Other Direct Expenses are intentionally excluded;
-        # they appear as Stock Adjustments (SLE) or Indirect Expenses (GL).
+        if r.voucher_type == 'Landed Cost Voucher':
+            landing_cost += g
+        elif is_foreign:
+            import_pur += g
+            returns    += ret
+        else:
+            local_pur  += g
+            returns    += ret
 
-    total = local_pur + import_pur + local_lc + import_lc - returns
+    total = local_pur + import_pur + landing_cost - returns
     return frappe._dict(
-        local_pur  = flt(local_pur),
-        import_pur = flt(import_pur),
-        local_lc   = flt(local_lc),
-        import_lc  = flt(import_lc),
-        returns    = flt(returns),
-        total      = flt(total),
+        local_pur    = flt(local_pur),
+        import_pur   = flt(import_pur),
+        landing_cost = flt(landing_cost),
+        returns      = flt(returns),
+        total        = flt(total),
     )
 
 

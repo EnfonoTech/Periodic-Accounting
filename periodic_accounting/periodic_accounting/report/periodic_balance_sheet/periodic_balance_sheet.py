@@ -20,7 +20,7 @@ from periodic_accounting.periodic_accounting.report.report_utils import (
     get_sle_stock_as_of,
     get_opening_stock,
     get_closing_stock,
-    get_gl_purchase_split,
+    get_purchase_split,
     get_stock_adjustments,
     get_sales,
     get_other_income_rows,
@@ -84,11 +84,11 @@ def _gnp(co, fd, td, wh=None, cc=None):
 def compute_net_profit(filters):
     opening_stock     = get_opening_stock(filters)
     closing_stock     = get_closing_stock(filters)
-    pur               = get_gl_purchase_split(filters)
+    pur               = get_purchase_split(filters)
     stock_adjustments = get_stock_adjustments(filters)
     _, _, net_sales   = get_sales(filters)
 
-    net_purchases = pur.local_pur + pur.import_pur + pur.local_lc + pur.import_lc - pur.returns
+    net_purchases = pur.local_pur + pur.import_pur + pur.landing_cost - pur.returns
     cogs          = opening_stock + net_purchases + stock_adjustments - closing_stock
     gross_profit  = net_sales - cogs
 

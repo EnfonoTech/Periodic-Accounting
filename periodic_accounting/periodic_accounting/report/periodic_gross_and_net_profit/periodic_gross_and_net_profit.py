@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 from periodic_accounting.periodic_accounting.report.report_utils import (
     get_opening_stock,
     get_closing_stock,
-    get_gl_purchase_split,
+    get_purchase_split,
     get_stock_adjustments,
     get_sales,
     get_other_income_rows,
@@ -115,15 +115,14 @@ def build_rows(filters):
     # ── Compute figures ────────────────────────────────────────────────────────
     opening_stock                       = get_opening_stock(filters)
     closing_stock                       = get_closing_stock(filters)
-    pur                                 = get_gl_purchase_split(filters)
+    pur                                 = get_purchase_split(filters)
     stock_adjustments                   = get_stock_adjustments(filters)
     gross_sales, sal_returns, net_sales = get_sales(filters)
 
-    # COGS = Opening + Local Purchases + Import Purchases
-    #      + Local Landing Cost + Import Landing Cost
+    # COGS = Opening + Local Purchases + Import Purchases + Landing Costs
     #      +/- Stock Adjustments (SE/SR)  − Closing
     goods_available = (opening_stock + pur.local_pur + pur.import_pur
-                       + pur.local_lc + pur.import_lc - pur.returns
+                       + pur.landing_cost - pur.returns
                        + stock_adjustments)
     cogs            = goods_available - closing_stock
     gross_profit    = net_sales - cogs
@@ -164,37 +163,27 @@ def build_rows(filters):
 
     # ── COST OF GOODS SOLD ─────────────────────────────────────────────────────
     rows += [
-        R("Cost of Goods Sold  ← SLE + GL", is_group=True, row_type="section_header"),
-        R("Opening Stock",           amount=opening_stock, indent=1,
+        R("Cost of Goods Sold  ← SLE", is_group=True, row_type="section_header"),
+        R("Opening Stock", amount=opening_stock, indent=1,
           link=_sb(co, opening_date, opening_date, wh), pct=_p(opening_stock)),
     ]
 
-    # Purchases — show sub-lines only when they have a value
-    if pur.local_pur or pur.import_pur or pur.local_lc or pur.import_lc:
-        rows.append(R("Purchases  ← GL", is_group=True, indent=1, row_type="section_header"))
-        if pur.local_pur:
-            rows.append(R("Local Purchases",  amount=pur.local_pur,  indent=2,
-                          link=_purchase_entries(co, fd, td, wh), pct=_p(pur.local_pur)))
-        if pur.import_pur:
-            rows.append(R("Import Purchases", amount=pur.import_pur, indent=2,
-                          link=_purchase_entries(co, fd, td, wh), pct=_p(pur.import_pur)))
-        if pur.import_lc:
-            rows.append(R("Import Landing Cost", amount=pur.import_lc, indent=2,
-                          link=_purchase_entries(co, fd, td, wh), pct=_p(pur.import_lc)))
-        if pur.local_lc:
-            rows.append(R("Local Landing Cost",  amount=pur.local_lc,  indent=2,
-                          link=_purchase_entries(co, fd, td, wh), pct=_p(pur.local_lc)))
-        if pur.returns:
-            rows.append(R("Less: Purchase Returns", amount=-pur.returns, indent=2,
-                          link=_purchase_entries(co, fd, td, wh), pct=_p(-pur.returns)))
-        net_pur = pur.local_pur + pur.import_pur + pur.local_lc + pur.import_lc - pur.returns
-        rows.append(R("Net Purchases", amount=net_pur, indent=1,
-                      is_group=True, pct=_p(net_pur)))
-    else:
-        # Fallback when no GL purchase accounts matched (e.g. test/demo data)
-        rows.append(R("Net Purchases", amount=pur.total, indent=1,
-                      is_group=True, link=_purchase_entries(co, fd, td, wh),
-                      pct=_p(pur.total)))
+    # Purchases — show sub-lines by local/import/landing
+    rows.append(R("Purchases  ← SLE", is_group=True, indent=1, row_type="section_header"))
+    if pur.local_pur:
+        rows.append(R("Local Purchases",  amount=pur.local_pur,  indent=2,
+                      link=_purchase_entries(co, fd, td, wh), pct=_p(pur.local_pur)))
+    if pur.import_pur:
+        rows.append(R("Import Purchases", amount=pur.import_pur, indent=2,
+                      link=_purchase_entries(co, fd, td, wh), pct=_p(pur.import_pur)))
+    if pur.landing_cost:
+        rows.append(R("Landing Costs (LCV)", amount=pur.landing_cost, indent=2,
+                      link=_purchase_entries(co, fd, td, wh), pct=_p(pur.landing_cost)))
+    if pur.returns:
+        rows.append(R("Less: Purchase Returns", amount=-pur.returns, indent=2,
+                      link=_purchase_entries(co, fd, td, wh), pct=_p(-pur.returns)))
+    net_pur = pur.local_pur + pur.import_pur + pur.landing_cost - pur.returns
+    rows.append(R("Net Purchases", amount=net_pur, indent=1, is_group=True, pct=_p(net_pur)))
 
     if stock_adjustments != 0:
         rows.append(R(

@@ -41,19 +41,20 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 	onload: function(report) {
 		function get_nav_params() {
 			return {
-				company:   report.get_filter_value("company"),
-				from_date: report.get_filter_value("from_date"),
-				to_date:   report.get_filter_value("to_date"),
-				warehouse: report.get_filter_value("warehouse") || undefined,
+				company:     report.get_filter_value("company"),
+				from_date:   report.get_filter_value("from_date"),
+				to_date:     report.get_filter_value("to_date"),
+				warehouse:   report.get_filter_value("warehouse")   || undefined,
 				cost_center: report.get_filter_value("cost_center") || undefined,
 			};
 		}
-		report.page.add_action_item(__("Gross & Net Profit"), function() {
+		const grp = __("Financial Statements");
+		report.page.add_inner_button(__("Gross & Net Profit"), function() {
 			frappe.set_route("query-report", "Periodic Gross and Net Profit", get_nav_params());
-		});
-		report.page.add_action_item(__("Balance Sheet"), function() {
+		}, grp);
+		report.page.add_inner_button(__("Balance Sheet"), function() {
 			frappe.set_route("query-report", "Periodic Balance Sheet", get_nav_params());
-		});
+		}, grp);
 	},
 
 	formatter: function(value, row, column, data, default_formatter) {
