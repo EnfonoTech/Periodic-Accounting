@@ -1,4 +1,8 @@
 app_name = "periodic_accounting"
+
+fixtures = [
+	{"dt": "Custom Field", "filters": [["dt", "=", "Warehouse"]]}
+]
 app_title = "Periodic Accounting"
 app_publisher = "siva"
 app_description = "Periodic Accounting"
@@ -23,6 +27,8 @@ app_license = "mit"
 
 # Includes in <head>
 # ------------------
+
+app_include_js = "/assets/periodic_accounting/js/periodic_accounting_utils.js"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/periodic_accounting/css/periodic_accounting.css"

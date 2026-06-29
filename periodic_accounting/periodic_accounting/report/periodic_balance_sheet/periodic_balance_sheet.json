@@ -1,0 +1,23 @@
+{
+ "add_total_row": 0,
+ "creation": "2026-06-29 00:00:00.000000",
+ "disabled": 0,
+ "doctype": "Report",
+ "is_standard": "Yes",
+ "modified": "2026-06-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Periodic Accounting",
+ "name": "Periodic Balance Sheet",
+ "owner": "Administrator",
+ "ref_doctype": "GL Entry",
+ "report_name": "Periodic Balance Sheet",
+ "report_type": "Script Report",
+ "roles": [
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Accounts User"
+  }
+ ]
+}

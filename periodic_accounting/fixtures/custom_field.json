@@ -1,0 +1,15 @@
+[
+ {
+  "doctype": "Custom Field",
+  "name": "Warehouse-cost_center",
+  "dt": "Warehouse",
+  "label": "Default Cost Center",
+  "fieldname": "cost_center",
+  "fieldtype": "Link",
+  "options": "Cost Center",
+  "insert_after": "account",
+  "in_list_view": 0,
+  "search_index": 1,
+  "description": "Link this warehouse to a cost centre for periodic report filtering"
+ }
+]
