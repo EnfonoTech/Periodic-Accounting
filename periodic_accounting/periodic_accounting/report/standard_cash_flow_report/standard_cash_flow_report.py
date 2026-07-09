@@ -164,7 +164,10 @@ def _compute_mapping(mapping_name, filters):
     ct  = m.calculation_type or "GL: credit minus debit"
 
     if ct == "SLE: inventory change":
-        return flt(get_opening_stock(filters) - get_closing_stock(filters))
+        # report_utils helpers expect from_date/to_date, not period_start/end_date
+        sf = frappe._dict(filters)
+        sf.from_date, sf.to_date = fd, td
+        return flt(get_opening_stock(sf) - get_closing_stock(sf))
 
     accounts = [row.account for row in (m.accounts or []) if row.account]
     cmd = (ct == "GL: credit minus debit")
