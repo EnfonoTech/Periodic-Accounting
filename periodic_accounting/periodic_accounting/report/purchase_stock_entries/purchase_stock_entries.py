@@ -33,6 +33,7 @@ def get_columns():
         {"label": _("Date"),         "fieldname": "posting_date",          "fieldtype": "Date",         "width": 100},
         {"label": _("Voucher Type"), "fieldname": "voucher_type",           "fieldtype": "Data",         "width": 150},
         {"label": _("Voucher No"),   "fieldname": "voucher_no",             "fieldtype": "Dynamic Link", "options": "voucher_type", "width": 180},
+        {"label": _("Currency"),     "fieldname": "voucher_currency",       "fieldtype": "Data",         "width": 85},
         {"label": _("Item Code"),    "fieldname": "item_code",              "fieldtype": "Link",         "options": "Item", "width": 130},
         {"label": _("Item Name"),    "fieldname": "item_name",              "fieldtype": "Data",         "width": 200},
         {"label": _("Warehouse"),    "fieldname": "warehouse",              "fieldtype": "Link",         "options": "Warehouse", "width": 160},
@@ -46,11 +47,35 @@ def get_columns():
 def get_data(filters):
     join, wh_clause, wh_params = sle_warehouse_clause(filters)
 
+    co_currency = frappe.db.get_value(
+        "Company", filters.get("company"), "default_currency") or ""
+
+    # Same classification rule as report_utils.get_purchase_split — voucher
+    # currency vs company currency decides Local / Import.
+    ptype_clause, ptype_params = "", []
+    ptype = filters.get("purchase_type")
+    if ptype == "Local":
+        ptype_clause = (" AND sle.voucher_type != 'Landed Cost Voucher'"
+                        " AND COALESCE(pr.currency, pi.currency, %s) = %s"
+                        " AND sle.stock_value_difference >= 0")
+        ptype_params = [co_currency, co_currency]
+    elif ptype == "Import":
+        ptype_clause = (" AND sle.voucher_type != 'Landed Cost Voucher'"
+                        " AND COALESCE(pr.currency, pi.currency, %s) != %s"
+                        " AND sle.stock_value_difference >= 0")
+        ptype_params = [co_currency, co_currency]
+    elif ptype == "Landed Cost":
+        ptype_clause = " AND sle.voucher_type = 'Landed Cost Voucher'"
+    elif ptype == "Returns":
+        ptype_clause = (" AND sle.voucher_type != 'Landed Cost Voucher'"
+                        " AND sle.stock_value_difference < 0")
+
     raw = frappe.db.sql(
         f"""SELECT
                 sle.posting_date,
                 sle.voucher_type,
                 sle.voucher_no,
+                COALESCE(pr.currency, pi.currency, %s) AS voucher_currency,
                 sle.item_code,
                 itm.item_name,
                 sle.warehouse,
@@ -60,6 +85,10 @@ def get_data(filters):
                 sle.stock_value_difference
             FROM `tabStock Ledger Entry` sle
             LEFT JOIN `tabItem` itm ON itm.name = sle.item_code
+            LEFT JOIN `tabPurchase Receipt` pr
+                ON pr.name = sle.voucher_no AND sle.voucher_type = 'Purchase Receipt'
+            LEFT JOIN `tabPurchase Invoice` pi
+                ON pi.name = sle.voucher_no AND sle.voucher_type = 'Purchase Invoice'
             {join}
             WHERE {wh_clause}
               AND sle.posting_date BETWEEN %s AND %s
@@ -67,8 +96,10 @@ def get_data(filters):
                   'Purchase Invoice', 'Purchase Receipt', 'Landed Cost Voucher'
               )
               AND sle.is_cancelled = 0
+              {ptype_clause}
             ORDER BY sle.voucher_type, sle.posting_date, sle.voucher_no, sle.item_code""",
-        wh_params + [str(filters.from_date), str(filters.to_date)],
+        [co_currency] + wh_params
+        + [str(filters.from_date), str(filters.to_date)] + ptype_params,
         as_dict=True,
     )
 

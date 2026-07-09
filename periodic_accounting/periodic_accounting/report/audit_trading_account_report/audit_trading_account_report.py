@@ -54,10 +54,20 @@ def _sl(co, fd, td, wh=None):
     if wh: p["warehouse"] = wh
     return _url("Stock Ledger", p)
 
-def _sb(co, date, wh=None):
-    p = {"company": co, "date": str(date)}
+def _sb(co, fd, td, wh=None):
+    # Stock Balance filters are from_date/to_date — mirror the report's own dates
+    p = {"company": co, "from_date": str(fd), "to_date": str(td)}
     if wh: p["warehouse"] = wh
     return _url("Stock Balance", p)
+
+
+def _pse(co, fd, td, wh=None, ptype=None):
+    """Purchase Stock Entries drill-down carrying the exact date filters and
+    the Local/Import/Landed Cost/Returns classification of the clicked row."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if wh: p["warehouse"] = wh
+    if ptype: p["purchase_type"] = ptype
+    return _url("Purchase Stock Entries", p)
 
 def _sr(co, fd, td):
     return _url("Sales Register", {"company": co, "from_date": fd, "to_date": td})
@@ -495,51 +505,52 @@ def build_main(co, fd, td, wh, cc):
         S(),
 
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
-        R("Opening Stock", debit=op, indent=1, link=_sb(co, opening_date, wh)),
+        R("Opening Stock", debit=op, indent=1,
+          link=_sb(co, opening_date, opening_date, wh)),
 
-        # ── Purchases with update stock ───────────────────────────────────────
-        R("Purchases  ← PI  (with Update Stock)", bold=True, indent=1),
+        # ── Purchases (realtime-report format) ────────────────────────────────
+        R("Purchases  ← SLE", bold=True, indent=1),
     ]
 
     lcv_chg = lcv_charges(co, fd, td)
 
     if local_pur:
         rows.append(R("Local Purchases",
-                      debit=local_pur, indent=2, link=_pi_list(co, fd, td, currency, "local")))
+                      debit=local_pur, indent=2, link=_pse(co, fd, td, wh, "Local")))
     if import_pur:
-        rows.append(R("Import Purchases  (foreign currency)",
-                      debit=import_pur, indent=2, link=_pi_list(co, fd, td, currency, "import")))
+        rows.append(R("Import Purchases",
+                      debit=import_pur, indent=2, link=_pse(co, fd, td, wh, "Import")))
     if lcv:
-        rows.append(R("Landed Cost Vouchers",
-                      debit=lcv, indent=2, link=_lcv_list(co, fd, td)))
+        rows.append(R("Landing Costs (LCV)",
+                      debit=lcv, indent=2, link=_pse(co, fd, td, wh, "Landed Cost")))
     if lcv_chg and not lcv:
         rows.append(R("of which: Landed Cost Charges  (freight/customs — included above)",
                       debit=lcv_chg, indent=3, link=_lcv_list(co, fd, td)))
     if pur_ret:
-        rows.append(R("Less: Returns",
-                      credit=pur_ret, indent=2, link=_pi_list(co, fd, td, currency, "return")))
+        rows.append(R("Less: Purchase Returns",
+                      credit=pur_ret, indent=2, link=_pse(co, fd, td, wh, "Returns")))
 
-    rows.append(R("Net Purchases  (with Update Stock)",
-                  debit=net_pur, bold=True, indent=1, row_type="subtotal"))
+    rows.append(R("Net Purchases", debit=net_pur, bold=True, indent=1, row_type="subtotal"))
 
-    # ── Purchases without update stock (stocked items — shown for visibility) ─
-    rows.append(R("Purchases  ← PI  (without Update Stock, stocked items)", bold=True, indent=1))
+    # ── Purchases without update stock (non-SLE, stocked items) — only when present ─
+    if pi_no_local or pi_no_import or pi_no_lcv or pi_no_ret:
+        rows.append(R("Purchases  ← PI  (without Update Stock, stocked items)", bold=True, indent=1))
 
-    if pi_no_local:
-        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2,
-                      link=_pi_list(co, fd, td, currency, "local")))
-    if pi_no_import:
-        rows.append(R("Import Purchases  (foreign currency)", debit=pi_no_import, indent=2,
-                      link=_pi_list(co, fd, td, currency, "import")))
-    if pi_no_lcv:
-        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2,
-                      link=_lcv_list(co, fd, td)))
-    if pi_no_ret:
-        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2,
-                      link=_pi_list(co, fd, td, currency, "return")))
+        if pi_no_local:
+            rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2,
+                          link=_pi_list(co, fd, td, currency, "local")))
+        if pi_no_import:
+            rows.append(R("Import Purchases", debit=pi_no_import, indent=2,
+                          link=_pi_list(co, fd, td, currency, "import")))
+        if pi_no_lcv:
+            rows.append(R("Landing Costs (LCV)", debit=pi_no_lcv, indent=2,
+                          link=_lcv_list(co, fd, td)))
+        if pi_no_ret:
+            rows.append(R("Less: Purchase Returns", credit=pi_no_ret, indent=2,
+                          link=_pi_list(co, fd, td, currency, "return")))
 
-    rows.append(R("Net Purchases  (without Update Stock)",
-                  debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
+        rows.append(R("Net Purchases  (without Update Stock)",
+                      debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
 
     # ── COGS formula continues with SLE-based goods available ─────────────────
     rows.append(R("Goods Available for Sale", debit=goods_avail, indent=1))
@@ -553,7 +564,7 @@ def build_main(co, fd, td, wh, cc):
                           credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, td, wh)),
+        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, fd, td, wh)),
         R("NET COGS",            debit=formula_cogs, bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT",
@@ -578,7 +589,7 @@ def build_main(co, fd, td, wh, cc):
              debit =bin_gl_var if bin_gl_var >  0.005 else 0,
              credit=abs(bin_gl_var) if bin_gl_var < -0.005 else 0,
              bold=True, indent=1, row_type="variance",
-             link=_url("Stock Balance", {"company": co, "date": td})),
+             link=_url("Stock Balance", {"company": co, "from_date": fd, "to_date": td})),
          "_is_variance": True, "_clean": abs(bin_gl_var) <= 0.005},
     ]
 
@@ -617,9 +628,9 @@ def build_warehouse_breakdown(co, fd, td, cc):
         rows += [
             S(),
             R(wh, bold=True, indent=1, row_type="wh_header"),
-            R("Opening Stock",      debit=op,      indent=2, link=_sb(co, str(add_days(fd, -1)), wh)),
+            R("Opening Stock",      debit=op,      indent=2, link=_sb(co, str(add_days(fd, -1)), str(add_days(fd, -1)), wh)),
             R("Net Purchases",      debit=net_pur,  indent=2, link=_sl(co, fd, td, wh)),
-            R("Closing Stock",      credit=cl,      indent=2, link=_sb(co, td, wh)),
+            R("Closing Stock",      credit=cl,      indent=2, link=_sb(co, fd, td, wh)),
             R("NET COGS (Formula)", debit=cogs,     indent=2, bold=True, row_type="subtotal"),
         ]
     return rows

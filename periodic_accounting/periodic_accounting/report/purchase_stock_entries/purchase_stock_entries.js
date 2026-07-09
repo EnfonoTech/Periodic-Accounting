@@ -33,6 +33,13 @@ frappe.query_reports["Purchase Stock Entries"] = {
 			label: __("Cost Center"),
 			fieldtype: "Link",
 			options: "Cost Center"
+		},
+		{
+			fieldname: "purchase_type",
+			label: __("Purchase Type"),
+			fieldtype: "Select",
+			options: "\nLocal\nImport\nLanded Cost\nReturns",
+			default: ""
 		}
 	],
 
