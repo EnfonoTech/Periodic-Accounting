@@ -132,10 +132,10 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     """
     Purchase breakdown for stocked items (is_stock_item=1) only.
 
-    With update stock (SLE — PR or PI with update_stock=1):
+    With update stock (SLE — PI with update_stock=1 only):
         local_pur, import_pur  — by currency
-        lcv                    — LCV linked to PR / PI-with-update-stock
-        pur_ret                — returns
+        lcv                    — LCV linked to PI-with-update-stock
+        pur_ret                — returns (PI credit notes)
 
     Without update stock (PI with update_stock=0, stocked items):
         pi_no_local, pi_no_import — by currency
@@ -157,10 +157,10 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     base = " AND ".join(c) + f" AND sle.posting_date BETWEEN %s AND %s {vno}"
     bp   = p + [fd, td] + vp
 
-    # ── SLE-based purchases (PR + PI with update_stock=1), split by currency ──
+    # ── SLE-based purchases (Purchase Invoice with update_stock=1), by currency ─
     sle_rows = frappe.db.sql(
         f"""SELECT
-                COALESCE(pr.currency, pi.currency, %s)           AS cur,
+                COALESCE(pi.currency, %s)                        AS cur,
                 COALESCE(SUM(CASE WHEN sle.stock_value_difference > 0
                              THEN sle.stock_value_difference ELSE 0 END), 0) AS gross,
                 COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0
@@ -168,12 +168,10 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
             FROM `tabStock Ledger Entry` sle {j}
             INNER JOIN `tabItem` itm
                 ON itm.name=sle.item_code AND itm.is_stock_item=1
-            LEFT JOIN `tabPurchase Receipt` pr
-                ON pr.name=sle.voucher_no AND sle.voucher_type='Purchase Receipt'
-            LEFT JOIN `tabPurchase Invoice` pi
-                ON pi.name=sle.voucher_no AND sle.voucher_type='Purchase Invoice'
+            INNER JOIN `tabPurchase Invoice` pi
+                ON pi.name=sle.voucher_no
             WHERE {base}
-              AND sle.voucher_type IN ('Purchase Receipt', 'Purchase Invoice')
+              AND sle.voucher_type='Purchase Invoice'
               AND sle.is_cancelled=0
             GROUP BY cur""",
         [company_cur] + bp, as_dict=True,
@@ -453,26 +451,11 @@ def build_main(co, fd, td, wh, cc):
         R("Less: Returns / Credit Notes", debit=sal_ret,    indent=1, link=_sr(co, fd, td)),
         R("NET SALES",                    credit=net_sales, bold=True, row_type="net_sales"),
         S(),
+
+        # ── COGS formula — compact, one net-purchases line ────────────────────
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
-        R("Opening Stock", debit=op, indent=1, link=_sb(co, opening_date, wh)),
-    ]
-
-    # ── Purchases with update stock (SLE-based, stocked items only) ───────────
-    if local_pur:
-        rows.append(R("    Local Purchases  (with Update Stock)",
-                      debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
-    if import_pur:
-        rows.append(R("    Import Purchases  (with Update Stock — foreign currency)",
-                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
-    if lcv:
-        rows.append(R("    Landed Cost Vouchers",
-                      debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
-    if pur_ret:
-        rows.append(R("Less: Purchase Returns", credit=pur_ret, indent=1, link=_sl(co, fd, td, wh)))
-
-    rows += [
-        R("Net Purchases  (with Update Stock)",
-          debit=net_pur, bold=True, indent=1, row_type="subtotal"),
+        R("Opening Stock",      debit=op,           indent=1, link=_sb(co, opening_date, wh)),
+        R("Net Purchases",      debit=net_pur,       indent=1, link=_sl(co, fd, td, wh)),
         R("Goods Available for Sale", debit=goods_avail, indent=1),
     ]
 
@@ -485,8 +468,8 @@ def build_main(co, fd, td, wh, cc):
                           credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Less: Closing Stock",  credit=cl,          indent=1, link=_sb(co, td, wh)),
-        R("NET COGS",             debit=formula_cogs, bold=True, row_type="net_cogs"),
+        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, td, wh)),
+        R("NET COGS",            debit=formula_cogs, bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT",
           debit =gross_profit if gross_profit <  0 else 0,
@@ -495,25 +478,43 @@ def build_main(co, fd, td, wh, cc):
         S(),
     ]
 
-    # ── Purchases without update stock (stocked items — audit section) ─────────
-    if pi_no_local or pi_no_import or pi_no_lcv or pi_no_ret:
-        pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
-        rows.append(H("PURCHASES WITHOUT UPDATE STOCK  (stocked items — not in COGS formula)"))
-        if pi_no_local:
-            rows.append(R("Local Purchases  (PI, no update stock)",
-                          debit=pi_no_local, indent=1))
-        if pi_no_import:
-            rows.append(R("Import Purchases  (PI, no update stock — foreign currency)",
-                          debit=pi_no_import, indent=1))
-        if pi_no_lcv:
-            rows.append(R("Landed Cost Vouchers  (linked to PI, no update stock)",
-                          debit=pi_no_lcv, indent=1))
-        if pi_no_ret:
-            rows.append(R("Less: Returns  (PI, no update stock)",
-                          credit=pi_no_ret, indent=1))
-        rows.append(R("Net Purchases Without Update Stock",
-                      debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
-        rows.append(S())
+    # ── Purchase Split — all purchases, both with and without update stock ────
+    rows.append(H("PURCHASE SPLIT"))
+
+    # With update stock (SLE-based — PI with update_stock=1 + LCV)
+    rows.append(R("With Update Stock  (PI)", bold=True, indent=1))
+    if local_pur:
+        rows.append(R("Local Purchases",   debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
+    if import_pur:
+        rows.append(R("Import Purchases  (foreign currency)",
+                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
+    if lcv:
+        rows.append(R("Landed Cost Vouchers", debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
+    if pur_ret:
+        rows.append(R("Less: Returns", credit=pur_ret, indent=2, link=_sl(co, fd, td, wh)))
+    rows.append(R("Net  (with Update Stock)", debit=net_pur, bold=True, indent=2,
+                  row_type="subtotal"))
+
+    # Without update stock (PI item table — stocked items only)
+    pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
+    rows.append(S())
+    rows.append(R("Without Update Stock  (PI, stocked items)", bold=True, indent=1))
+    if pi_no_local:
+        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2))
+    if pi_no_import:
+        rows.append(R("Import Purchases  (foreign currency)",
+                      debit=pi_no_import, indent=2))
+    if pi_no_lcv:
+        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2))
+    if pi_no_ret:
+        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2))
+    rows.append(R("Net  (without Update Stock)", debit=pi_no_net, bold=True, indent=2,
+                  row_type="subtotal"))
+
+    rows.append(S())
+    rows.append(R("TOTAL PURCHASES  (with + without Update Stock)",
+                  debit=net_pur + pi_no_net, bold=True, row_type="subtotal"))
+    rows.append(S())
 
     # ── GL Reconciliation ─────────────────────────────────────────────────────
     rows += [
