@@ -5,7 +5,7 @@ Each line row carries _accounts / _link_type for JS drill-down.
 """
 import frappe
 from frappe import _
-from frappe.utils import flt, add_days
+from frappe.utils import cint, flt, add_days
 
 from periodic_accounting.periodic_accounting.report.report_utils import (
     get_opening_stock,
@@ -136,6 +136,58 @@ def _cash_balance(co, as_of, filters=None):
     return flt(r[0].val) if r else 0.0
 
 
+def _gl_by_account(co, fd, td, cmd=True, filters=None,
+                   accounts=None, account_type=None, root_types=None):
+    """Per-account net movement — the trial-balance-style breakup of one
+    cash flow line. Children returned here always sum to the parent figure."""
+    conds, params = [], []
+    if accounts:
+        ph = ", ".join(["%s"] * len(accounts))
+        conds.append(f"gle.account IN ({ph})")
+        params += list(accounts)
+    if account_type:
+        conds.append("acc.account_type = %s")
+        params.append(account_type)
+    if root_types:
+        ph = ", ".join(["%s"] * len(root_types))
+        conds.append(f"acc.root_type IN ({ph})")
+        params += list(root_types)
+    if not conds:
+        return []
+    fbc, fbp = _fb(filters or {})
+    exc, exp = _extra(filters or {})
+    sign = "credit - debit" if cmd else "debit - credit"
+    return frappe.db.sql(
+        f"""SELECT gle.account, COALESCE(SUM({sign}), 0) AS val
+            FROM `tabGL Entry` gle
+            INNER JOIN `tabAccount` acc ON acc.name = gle.account
+            WHERE gle.company = %s AND gle.posting_date BETWEEN %s AND %s
+              AND gle.is_cancelled = 0
+              AND gle.voucher_type != 'Period Closing Voucher'
+              AND {' AND '.join(conds)} {fbc}{exc}
+            GROUP BY gle.account
+            HAVING ABS(val) > 0.0005
+            ORDER BY gle.account""",
+        [co, fd, td] + params + fbp + exp, as_dict=True,
+    )
+
+
+def _cash_balance_by_account(co, as_of, filters=None):
+    fbc, fbp = _fb(filters or {})
+    return frappe.db.sql(
+        f"""SELECT gle.account, COALESCE(SUM(debit - credit), 0) AS val
+            FROM `tabGL Entry` gle
+            INNER JOIN `tabAccount` acc ON acc.name = gle.account
+            WHERE gle.company = %s AND gle.posting_date <= %s
+              AND acc.account_type IN ('Bank', 'Cash') AND gle.is_cancelled = 0
+              AND gle.voucher_type != 'Period Closing Voucher' {fbc}
+            GROUP BY gle.account
+            HAVING ABS(val) > 0.0005
+            ORDER BY gle.account""",
+        [co, str(as_of)] + fbp, as_dict=True,
+    )
+
+
 def _accts_by_type(co, account_type):
     return frappe.db.get_all(
         "Account",
@@ -209,6 +261,20 @@ def _build(filters):
     rows    = []
     summary = {}
 
+    breakup = cint(filters.get("show_account_breakup", 1))
+
+    def add_breakup(indent, cmd=True, accounts=None, account_type=None, root_types=None):
+        """Append per-account child rows (TB-style) under the last line row."""
+        if not breakup:
+            return
+        for ch in _gl_by_account(co, fd, td, cmd=cmd, filters=filters,
+                                 accounts=accounts, account_type=account_type,
+                                 root_types=root_types):
+            row = R(ch.account, ch.val, indent=indent)
+            row["_accounts"] = [ch.account]
+            row["_breakup"] = 1
+            rows.append(row)
+
     # Net Profit (GL-based)
     income     = _gl_root(co, fd, td, "Income",  cmd=True,  filters=filters)
     expense    = _gl_root(co, fd, td, "Expense", cmd=False, filters=filters)
@@ -220,6 +286,8 @@ def _build(filters):
     np_row = R(_("Net Profit / (Loss) for the Period"), net_profit, indent=1)
     np_row["_link_type"] = "profit_loss"
     rows.append(np_row)
+    # income positive / expense negative — children sum to net profit
+    add_breakup(2, cmd=True, root_types=["Income", "Expense"])
 
     op_amounts = []
 
@@ -233,7 +301,8 @@ def _build(filters):
             label    = getattr(item, "label_override", None) or mdoc.label or item.mapping
             amount   = _compute_mapping(item.mapping, filters)
             accounts = _mapping_accounts(item.mapping)
-            entry    = (label, amount, accounts)
+            cmd      = (mdoc.calculation_type or "GL: credit minus debit") == "GL: credit minus debit"
+            entry    = (label, amount, accounts, cmd)
             if mdoc.is_working_capital:
                 wc_list.append(entry)
             else:
@@ -241,20 +310,24 @@ def _build(filters):
 
         if adj_list:
             rows.append(R(_("Adjustments for Non-Cash Items:"), indent=1, bold=True))
-            for lbl, amt, accts in adj_list:
+            for lbl, amt, accts, cmd in adj_list:
                 row = R(lbl, amt, indent=2)
                 if accts:
                     row["_accounts"] = accts
                 rows.append(row)
+                if accts:
+                    add_breakup(3, cmd=cmd, accounts=accts)
                 op_amounts.append(amt)
 
         if wc_list:
             rows.append(R(_("Working Capital Changes:"), indent=1, bold=True))
-            for lbl, amt, accts in wc_list:
+            for lbl, amt, accts, cmd in wc_list:
                 row = R(lbl, amt, indent=2)
                 if accts:
                     row["_accounts"] = accts
                 rows.append(row)
+                if accts:
+                    add_breakup(3, cmd=cmd, accounts=accts)
                 op_amounts.append(amt)
     else:
         depr  = _gl_type(co, fd, td, "Depreciation", cmd=False, filters=filters)
@@ -266,20 +339,24 @@ def _build(filters):
         row = R(_("Depreciation"), depr, indent=2)
         row["_accounts"] = _accts_by_type(co, "Depreciation")
         rows.append(row)
+        add_breakup(3, cmd=False, account_type="Depreciation")
 
         rows.append(R(_("Working Capital Changes:"), indent=1, bold=True))
 
         row = R(_("Net Change in Accounts Receivable"), recv, indent=2)
         row["_accounts"] = _accts_by_type(co, "Receivable")
         rows.append(row)
+        add_breakup(3, cmd=True, account_type="Receivable")
 
         row = R(_("Net Change in Accounts Payable"), pay, indent=2)
         row["_accounts"] = _accts_by_type(co, "Payable")
         rows.append(row)
+        add_breakup(3, cmd=True, account_type="Payable")
 
         row = R(_("Net Change in Inventory"), stock, indent=2)
         row["_accounts"] = _accts_by_type(co, "Stock")
         rows.append(row)
+        add_breakup(3, cmd=True, account_type="Stock")
 
         op_amounts = [depr, recv, pay, stock]
 
@@ -304,6 +381,9 @@ def _build(filters):
             if accounts:
                 row["_accounts"] = accounts
             rows.append(row)
+            if accounts:
+                add_breakup(2, cmd=(mdoc.calculation_type or "GL: credit minus debit") == "GL: credit minus debit",
+                            accounts=accounts)
             inv_amounts.append(amount)
         inv_footer = mapper.section_footer or _("Net Cash from Investing Activities")
     else:
@@ -311,6 +391,7 @@ def _build(filters):
         row = R(_("Net Change in Fixed Assets"), fa, indent=1)
         row["_accounts"] = _accts_by_type(co, "Fixed Asset")
         rows.append(row)
+        add_breakup(2, cmd=True, account_type="Fixed Asset")
         inv_amounts = [fa]
         inv_footer  = _("Net Cash from Investing Activities")
 
@@ -334,6 +415,9 @@ def _build(filters):
             if accounts:
                 row["_accounts"] = accounts
             rows.append(row)
+            if accounts:
+                add_breakup(2, cmd=(mdoc.calculation_type or "GL: credit minus debit") == "GL: credit minus debit",
+                            accounts=accounts)
             fin_amounts.append(amount)
         fin_footer = mapper.section_footer or _("Net Cash from Financing Activities")
     else:
@@ -341,6 +425,7 @@ def _build(filters):
         row = R(_("Net Change in Equity"), eq, indent=1)
         row["_accounts"] = _accts_by_type(co, "Equity")
         rows.append(row)
+        add_breakup(2, cmd=True, account_type="Equity")
         fin_amounts = [eq]
         fin_footer  = _("Net Cash from Financing Activities")
 
@@ -363,10 +448,22 @@ def _build(filters):
         row = R(f"Opening Cash & Bank Balance  (as of {add_days(fd, -1)})", opening, indent=1)
         row["_accounts"] = cash_accts
         rows.append(row)
+        if breakup:
+            for ch in _cash_balance_by_account(co, str(add_days(fd, -1)), filters=filters):
+                crow = R(ch.account, ch.val, indent=2)
+                crow["_accounts"] = [ch.account]
+                crow["_breakup"] = 1
+                rows.append(crow)
 
         row = R(f"Closing Cash & Bank Balance  (as of {td})", closing, indent=1)
         row["_accounts"] = cash_accts
         rows.append(row)
+        if breakup:
+            for ch in _cash_balance_by_account(co, td, filters=filters):
+                crow = R(ch.account, ch.val, indent=2)
+                crow["_accounts"] = [ch.account]
+                crow["_breakup"] = 1
+                rows.append(crow)
 
         summary[_("Opening Cash Balance")] = opening
         summary[_("Closing Cash Balance")] = closing

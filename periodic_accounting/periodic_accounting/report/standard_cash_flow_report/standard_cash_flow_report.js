@@ -58,6 +58,12 @@ frappe.query_reports["Standard Cash Flow Report"] = {
 			fieldtype: "Check",
 			default: 0,
 		},
+		{
+			fieldname: "show_account_breakup",
+			label: __("Show Account Breakup"),
+			fieldtype: "Check",
+			default: 1,
+		},
 	],
 
 	formatter: function (value, row, column, data, default_formatter) {
@@ -83,6 +89,16 @@ frappe.query_reports["Standard Cash Flow Report"] = {
 			var enc = (data && data._accounts && data._accounts.length)
 				? encodeURIComponent(JSON.stringify(data._accounts))
 				: "";
+
+			// Account-breakup child rows (TB-style) — muted, click → GL for that account
+			if (data && data._breakup) {
+				return "<span class='cf-drill'"
+					+ (enc ? " data-enc='" + enc + "'" : "")
+					+ " style='cursor:pointer;color:var(--text-muted,#74808b);"
+					+ "text-decoration:underline dotted;font-size:0.95em;'>"
+					+ display + "</span>";
+			}
+
 			return "<span class='cf-drill'"
 				+ (enc ? " data-enc='" + enc + "'" : "")
 				+ " style='cursor:pointer;color:var(--primary,#4c85e7);text-decoration:underline;'>"
