@@ -55,6 +55,9 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 		report.page.add_inner_button(__("Balance Sheet"), function() {
 			frappe.set_route("query-report", "Periodic Balance Sheet", get_nav_params());
 		}, grp);
+		report.page.add_inner_button(__("Cash Flow"), function() {
+			frappe.set_route("query-report", "Standard Cash Flow Report", get_nav_params());
+		}, grp);
 	},
 
 	formatter: function(value, row, column, data, default_formatter) {

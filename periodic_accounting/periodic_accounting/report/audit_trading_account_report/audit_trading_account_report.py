@@ -85,42 +85,24 @@ def _sle(company, warehouse, extra_conds, extra_params, select):
 
 
 def opening_stock(co, fd, wh=None):
-    """
-    Cumulative SLE before from_date PLUS any Stock Reconciliation (purpose=Opening Stock)
-    posted within the period — those represent opening balance loads, not period adjustments.
-    """
-    j, c, p = _wh_base(co, wh)
-    where = " AND ".join(c)
-    r = frappe.db.sql(f"""
-        SELECT COALESCE(SUM(sle.stock_value_difference),0) AS v
-        FROM `tabStock Ledger Entry` sle {j}
-        LEFT JOIN `tabStock Reconciliation` sr
-            ON sr.name=sle.voucher_no AND sle.voucher_type='Stock Reconciliation'
-        WHERE {where}
-          AND (sle.posting_date < %s
-               OR (sle.voucher_type='Stock Reconciliation'
-                   AND COALESCE(sr.purpose,'')='Opening Stock'))
-    """, p + [fd], as_dict=True)
-    return flt(r[0].v) if r else 0.0
+    """Opening stock = closing stock as of the day before from_date (Tally convention)."""
+    return closing_stock(co, str(add_days(fd, -1)), wh)
 
 
 def stock_recon_adjustment(co, fd, td, wh=None):
     """
-    Net Stock Reconciliation (purpose != Opening Stock) within the period.
-    Positive = excess found; Negative = shortage / write-off.
-    Opening Stock purpose reconciliations are excluded — they belong in opening_stock().
+    Net Stock Reconciliation within the period (all purposes).
+    Positive = excess found / opening load; Negative = shortage / write-off.
     """
     j, c, p = _wh_base(co, wh)
     where = " AND ".join(c)
     r = frappe.db.sql(f"""
         SELECT COALESCE(SUM(sle.stock_value_difference),0) AS v
         FROM `tabStock Ledger Entry` sle {j}
-        LEFT JOIN `tabStock Reconciliation` sr
-            ON sr.name=sle.voucher_no AND sle.voucher_type='Stock Reconciliation'
         WHERE {where}
           AND sle.posting_date BETWEEN %s AND %s
           AND sle.voucher_type='Stock Reconciliation'
-          AND COALESCE(sr.purpose,'')!='Opening Stock'
+          AND sle.is_cancelled=0
     """, p + [fd, td], as_dict=True)
     return flt(r[0].v) if r else 0.0
 
@@ -147,7 +129,19 @@ def closing_stock(co, td, wh=None):
 
 
 def purchase_split(co, fd, td, wh=None, cc_vnos=None):
-    """Returns (local_pr, import_pr, lcv, pi_adj, pur_ret) all in base currency."""
+    """
+    Purchase breakdown for stocked items (is_stock_item=1) only.
+
+    With update stock (SLE — PR or PI with update_stock=1):
+        local_pur, import_pur  — by currency
+        lcv                    — LCV linked to PR / PI-with-update-stock
+        pur_ret                — returns
+
+    Without update stock (PI with update_stock=0, stocked items):
+        pi_no_local, pi_no_import — by currency
+        pi_no_lcv                 — LCV linked to those PI-without-update-stock
+        pi_no_ret                 — returns
+    """
     company_cur = frappe.db.get_value("Company", co, "default_currency") or ""
     j, c, p = _wh_base(co, wh)
 
@@ -155,7 +149,7 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     vp  = []
     if cc_vnos is not None:
         if not cc_vnos:
-            return 0.0, 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         ph  = ",".join(["%s"]*len(cc_vnos))
         vno = f" AND sle.voucher_no IN ({ph})"
         vp  = list(cc_vnos)
@@ -163,30 +157,113 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     base = " AND ".join(c) + f" AND sle.posting_date BETWEEN %s AND %s {vno}"
     bp   = p + [fd, td] + vp
 
-    def q(extra_join, extra_where, extra_params, agg="SUM(sle.stock_value_difference)"):
-        r = frappe.db.sql(
-            f"SELECT COALESCE({agg},0) AS v "
-            f"FROM `tabStock Ledger Entry` sle {j} {extra_join} "
-            f"WHERE {base} AND {extra_where} AND sle.is_cancelled=0",
-            bp + extra_params, as_dict=True,
-        )
-        return flt(r[0].v) if r else 0.0
+    # ── SLE-based purchases (PR + PI with update_stock=1), split by currency ──
+    sle_rows = frappe.db.sql(
+        f"""SELECT
+                COALESCE(pr.currency, pi.currency, %s)           AS cur,
+                COALESCE(SUM(CASE WHEN sle.stock_value_difference > 0
+                             THEN sle.stock_value_difference ELSE 0 END), 0) AS gross,
+                COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0
+                             THEN sle.stock_value_difference ELSE 0 END)), 0) AS ret
+            FROM `tabStock Ledger Entry` sle {j}
+            INNER JOIN `tabItem` itm
+                ON itm.name=sle.item_code AND itm.is_stock_item=1
+            LEFT JOIN `tabPurchase Receipt` pr
+                ON pr.name=sle.voucher_no AND sle.voucher_type='Purchase Receipt'
+            LEFT JOIN `tabPurchase Invoice` pi
+                ON pi.name=sle.voucher_no AND sle.voucher_type='Purchase Invoice'
+            WHERE {base}
+              AND sle.voucher_type IN ('Purchase Receipt', 'Purchase Invoice')
+              AND sle.is_cancelled=0
+            GROUP BY cur""",
+        [company_cur] + bp, as_dict=True,
+    )
 
-    local_pr  = q("INNER JOIN `tabPurchase Receipt` pr ON pr.name=sle.voucher_no",
-                  "sle.voucher_type='Purchase Receipt' AND pr.is_return=0 AND sle.stock_value_difference>0 AND pr.currency=%s",
-                  [company_cur])
-    import_pr = q("INNER JOIN `tabPurchase Receipt` pr ON pr.name=sle.voucher_no",
-                  "sle.voucher_type='Purchase Receipt' AND pr.is_return=0 AND sle.stock_value_difference>0 AND pr.currency!=%s",
-                  [company_cur])
-    lcv       = q("", "sle.voucher_type='Landed Cost Voucher'", [])
-    pi_adj    = q("INNER JOIN `tabPurchase Invoice` pi ON pi.name=sle.voucher_no",
-                  "sle.voucher_type='Purchase Invoice' AND pi.is_return=0", [])
-    pur_ret   = abs(q(
-        "LEFT JOIN `tabPurchase Receipt` pr ON pr.name=sle.voucher_no AND sle.voucher_type='Purchase Receipt' "
-        "LEFT JOIN `tabPurchase Invoice` pi ON pi.name=sle.voucher_no AND sle.voucher_type='Purchase Invoice'",
-        "sle.stock_value_difference<0 AND ((sle.voucher_type='Purchase Receipt' AND pr.is_return=1) OR (sle.voucher_type='Purchase Invoice' AND pi.is_return=1))",
-        []))
-    return local_pr, import_pr, lcv, pi_adj, pur_ret
+    local_pur = import_pur = pur_ret = 0.0
+    for row in sle_rows:
+        is_foreign = (row.cur or company_cur) != company_cur
+        if is_foreign:
+            import_pur += flt(row.gross)
+        else:
+            local_pur  += flt(row.gross)
+        pur_ret += flt(row.ret)
+
+    # Subquery to identify LCVs linked to PI-without-update-stock
+    _pi_no_lcv_subq = """
+        SELECT 1 FROM `tabLanded Cost Purchase Receipt` lcpr
+        INNER JOIN `tabPurchase Invoice` pi2
+            ON pi2.name=lcpr.receipt_document
+            AND lcpr.receipt_document_type='Purchase Invoice'
+            AND pi2.update_stock=0
+        WHERE lcpr.parent=sle.voucher_no
+    """
+
+    # ── LCV linked to PR / PI-with-update-stock ───────────────────────────────
+    lcv_r = frappe.db.sql(f"""
+        SELECT COALESCE(SUM(sle.stock_value_difference), 0) AS v
+        FROM `tabStock Ledger Entry` sle {j}
+        INNER JOIN `tabItem` itm ON itm.name=sle.item_code AND itm.is_stock_item=1
+        WHERE {base}
+          AND sle.voucher_type='Landed Cost Voucher'
+          AND sle.is_cancelled=0
+          AND NOT EXISTS ({_pi_no_lcv_subq})
+    """, bp, as_dict=True)
+    lcv = flt(lcv_r[0].v) if lcv_r else 0.0
+
+    # ── LCV linked to PI-without-update-stock ─────────────────────────────────
+    pi_no_lcv_r = frappe.db.sql(f"""
+        SELECT COALESCE(SUM(sle.stock_value_difference), 0) AS v
+        FROM `tabStock Ledger Entry` sle {j}
+        INNER JOIN `tabItem` itm ON itm.name=sle.item_code AND itm.is_stock_item=1
+        WHERE {base}
+          AND sle.voucher_type='Landed Cost Voucher'
+          AND sle.is_cancelled=0
+          AND EXISTS ({_pi_no_lcv_subq})
+    """, bp, as_dict=True)
+    pi_no_lcv = flt(pi_no_lcv_r[0].v) if pi_no_lcv_r else 0.0
+
+    # ── PI without update_stock, stocked items — local/import from PI table ───
+    wh_clause_no = "AND pii.warehouse=%s" if wh else ""
+    wh_param_no  = [wh] if wh else []
+
+    vno_pi = ""
+    vp_pi  = []
+    if cc_vnos is not None:
+        if cc_vnos:
+            ph     = ",".join(["%s"]*len(cc_vnos))
+            vno_pi = f"AND pi.name IN ({ph})"
+            vp_pi  = list(cc_vnos)
+        else:
+            vno_pi = "AND 1=0"
+
+    pi_no_rows = frappe.db.sql(f"""
+        SELECT
+            COALESCE(pi.currency, %s)                                              AS cur,
+            COALESCE(SUM(CASE WHEN pi.is_return=0 THEN pii.base_net_amount ELSE 0 END), 0) AS gross,
+            COALESCE(ABS(SUM(CASE WHEN pi.is_return=1 THEN pii.base_net_amount ELSE 0 END)), 0) AS ret
+        FROM `tabPurchase Invoice Item` pii
+        INNER JOIN `tabPurchase Invoice` pi  ON pi.name=pii.parent
+        INNER JOIN `tabItem`             itm ON itm.name=pii.item_code
+        WHERE pi.company=%s
+          AND pi.posting_date BETWEEN %s AND %s
+          AND pi.docstatus=1
+          AND pi.update_stock=0
+          AND itm.is_stock_item=1
+          {wh_clause_no} {vno_pi}
+        GROUP BY pi.currency
+    """, [company_cur, co, fd, td] + wh_param_no + vp_pi, as_dict=True)
+
+    pi_no_local = pi_no_import = pi_no_ret = 0.0
+    for row in pi_no_rows:
+        is_foreign = (row.cur or company_cur) != company_cur
+        if is_foreign:
+            pi_no_import += flt(row.gross)
+        else:
+            pi_no_local  += flt(row.gross)
+        pi_no_ret += flt(row.ret)
+
+    return (local_pur, import_pur, lcv, pur_ret,
+            pi_no_local, pi_no_import, pi_no_lcv, pi_no_ret)
 
 
 def sales_data(co, fd, td, cc=None):
@@ -354,8 +431,10 @@ def build_main(co, fd, td, wh, cc):
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
     recon   = stock_recon_adjustment(co, fd, td, wh)
-    loc, imp, lcv, pi_adj, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
-    net_pur      = loc + imp + lcv + pi_adj - pur_ret
+    (local_pur, import_pur, lcv, pur_ret,
+     pi_no_local, pi_no_import, pi_no_lcv, pi_no_ret) = purchase_split(co, fd, td, wh, cc_vnos)
+
+    net_pur      = local_pur + import_pur + lcv - pur_ret
     goods_avail  = op + net_pur
     formula_cogs = goods_avail + recon - cl
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
@@ -370,48 +449,74 @@ def build_main(co, fd, td, wh, cc):
 
     rows = [
         R("SALES", bold=True, row_type="section"),
-        R("Gross Sales Revenue",          credit=g_sales,    indent=1, link=_sr(co, fd, td)),
-        R("Less: Returns / Credit Notes", debit=sal_ret,     indent=1, link=_sr(co, fd, td)),
-        R("NET SALES",                    credit=net_sales,  bold=True, row_type="net_sales"),
+        R("Gross Sales Revenue",          credit=g_sales,   indent=1, link=_sr(co, fd, td)),
+        R("Less: Returns / Credit Notes", debit=sal_ret,    indent=1, link=_sr(co, fd, td)),
+        R("NET SALES",                    credit=net_sales, bold=True, row_type="net_sales"),
         S(),
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
         R("Opening Stock", debit=op, indent=1, link=_sb(co, opening_date, wh)),
     ]
 
-    if loc:
-        rows.append(R("    Local Purchases  (PR — company currency)",  debit=loc, indent=2, link=_sl(co, fd, td, wh)))
-    if imp:
-        rows.append(R("    Import Purchases  (PR — foreign currency)", debit=imp, indent=2, link=_sl(co, fd, td, wh)))
+    # ── Purchases with update stock (SLE-based, stocked items only) ───────────
+    if local_pur:
+        rows.append(R("    Local Purchases  (with Update Stock)",
+                      debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
+    if import_pur:
+        rows.append(R("    Import Purchases  (with Update Stock — foreign currency)",
+                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
     if lcv:
-        rows.append(R("    Landed Cost Vouchers",                      debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
-    if pi_adj:
-        rows.append(R("    PI Rate Adjustment",
-                      debit=pi_adj  if pi_adj > 0 else 0,
-                      credit=abs(pi_adj) if pi_adj < 0 else 0,
-                      indent=2))
+        rows.append(R("    Landed Cost Vouchers",
+                      debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
     if pur_ret:
         rows.append(R("Less: Purchase Returns", credit=pur_ret, indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Net Purchases",            debit=net_pur,     bold=True, indent=1, row_type="subtotal"),
+        R("Net Purchases  (with Update Stock)",
+          debit=net_pur, bold=True, indent=1, row_type="subtotal"),
         R("Goods Available for Sale", debit=goods_avail, indent=1),
     ]
 
     if recon:
         if recon > 0:
-            rows.append(R("Stock Reconciliation  (Excess Found)",   debit=recon,        indent=1, link=_sl(co, fd, td, wh)))
+            rows.append(R("Stock Reconciliation  (Excess Found / Opening Load)",
+                          debit=recon, indent=1, link=_sl(co, fd, td, wh)))
         else:
-            rows.append(R("Stock Reconciliation  (Shortage / Write-off)", credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
+            rows.append(R("Stock Reconciliation  (Shortage / Write-off)",
+                          credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Less: Closing Stock",      credit=cl,          indent=1, link=_sb(co, td, wh)),
-        R("NET COGS",                 debit=formula_cogs, bold=True, row_type="net_cogs"),
+        R("Less: Closing Stock",  credit=cl,          indent=1, link=_sb(co, td, wh)),
+        R("NET COGS",             debit=formula_cogs, bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT",
           debit =gross_profit if gross_profit <  0 else 0,
           credit=gross_profit if gross_profit >= 0 else 0,
           bold=True, row_type="gross_profit"),
         S(),
+    ]
+
+    # ── Purchases without update stock (stocked items — audit section) ─────────
+    if pi_no_local or pi_no_import or pi_no_lcv or pi_no_ret:
+        pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
+        rows.append(H("PURCHASES WITHOUT UPDATE STOCK  (stocked items — not in COGS formula)"))
+        if pi_no_local:
+            rows.append(R("Local Purchases  (PI, no update stock)",
+                          debit=pi_no_local, indent=1))
+        if pi_no_import:
+            rows.append(R("Import Purchases  (PI, no update stock — foreign currency)",
+                          debit=pi_no_import, indent=1))
+        if pi_no_lcv:
+            rows.append(R("Landed Cost Vouchers  (linked to PI, no update stock)",
+                          debit=pi_no_lcv, indent=1))
+        if pi_no_ret:
+            rows.append(R("Less: Returns  (PI, no update stock)",
+                          credit=pi_no_ret, indent=1))
+        rows.append(R("Net Purchases Without Update Stock",
+                      debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
+        rows.append(S())
+
+    # ── GL Reconciliation ─────────────────────────────────────────────────────
+    rows += [
         H("GL RECONCILIATION"),
         R("Perpetual GL COGS  (Dr on Cost of Goods Sold a/c)", debit=gl_cogs,       indent=1),
         R("Formula COGS  (Opening + Purchases − Closing)",      debit=formula_cogs,  indent=1),
@@ -454,8 +559,8 @@ def build_warehouse_breakdown(co, fd, td, cc):
     for wh in warehouses:
         op   = opening_stock(co, fd, wh)
         cl   = closing_stock(co, td, wh)
-        loc, imp, lcv, pi_adj, pur_ret = purchase_split(co, fd, td, wh)
-        net_pur = loc + imp + lcv + pi_adj - pur_ret
+        loc, imp, lcv, pur_ret, _a, _b, _c, _d = purchase_split(co, fd, td, wh)
+        net_pur = loc + imp + lcv - pur_ret
         cogs    = flt(op + net_pur - cl, 3)
 
         if op == 0 and net_pur == 0 and cl == 0:

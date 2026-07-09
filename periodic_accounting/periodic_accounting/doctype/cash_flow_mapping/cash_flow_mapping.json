@@ -1,0 +1,114 @@
+{
+ "actions": [],
+ "autoname": "field:mapping_name",
+ "creation": "2026-07-09 00:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Document",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "mapping_name",
+  "label",
+  "calculation_type",
+  "cb1",
+  "is_working_capital",
+  "is_finance_cost",
+  "is_income_tax_expense",
+  "section_accounts",
+  "accounts"
+ ],
+ "fields": [
+  {
+   "fieldname": "mapping_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "reqd": 1,
+   "description": "Text shown in the cash flow report for this line."
+  },
+  {
+   "default": "GL: credit minus debit",
+   "fieldname": "calculation_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Calculation Type",
+   "options": "GL: credit minus debit\nGL: debit minus credit\nSLE: inventory change",
+   "reqd": 1,
+   "description": "GL: credit minus debit — payables, equity (increase = inflow). GL: debit minus credit — add back non-cash charges like depreciation. SLE: inventory change — (opening − closing) from Stock Ledger; for non-perpetual inventory."
+  },
+  {
+   "fieldname": "cb1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_working_capital",
+   "fieldtype": "Check",
+   "label": "Is Working Capital",
+   "description": "Check for working capital items (receivables, payables, inventory). Grouped under the working capital sub-section in Operating Activities."
+  },
+  {
+   "default": "0",
+   "fieldname": "is_finance_cost",
+   "fieldtype": "Check",
+   "label": "Is Finance Cost",
+   "description": "Check if this represents finance costs (e.g. interest expense). Used for adjustments in Operating Activities."
+  },
+  {
+   "default": "0",
+   "fieldname": "is_income_tax_expense",
+   "fieldtype": "Check",
+   "label": "Is Income Tax Expense",
+   "description": "Check if this represents income tax expense. Used for tax adjustment in Operating Activities."
+  },
+  {
+   "fieldname": "section_accounts",
+   "fieldtype": "Section Break",
+   "label": "Accounts"
+  },
+  {
+   "fieldname": "accounts",
+   "fieldtype": "Table",
+   "label": "Accounts",
+   "options": "Cash Flow Mapping Accounts",
+   "description": "Select the GL accounts that make up this cash flow line. Leave empty when Calculation Type is 'SLE: inventory change'."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Periodic Accounting",
+ "name": "Cash Flow Mapping",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts User"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

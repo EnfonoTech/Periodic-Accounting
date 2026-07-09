@@ -61,5 +61,8 @@ frappe.query_reports["Periodic Balance Sheet"] = {
 		report.page.add_inner_button(__("Gross & Net Profit"), function() {
 			frappe.set_route("query-report", "Periodic Gross and Net Profit", get_nav_params());
 		}, grp);
+		report.page.add_inner_button(__("Cash Flow"), function() {
+			frappe.set_route("query-report", "Standard Cash Flow Report", get_nav_params());
+		}, grp);
 	},
 };

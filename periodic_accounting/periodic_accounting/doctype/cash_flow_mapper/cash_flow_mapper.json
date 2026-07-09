@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "autoname": "field:section_name",
+ "creation": "2026-07-09 00:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Document",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_name",
+  "section_footer",
+  "cb1",
+  "section_leader",
+  "section_subtotal",
+  "section_mappings",
+  "mapping"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Section Name",
+   "reqd": 1,
+   "description": "One of: Operating Activities, Investing Activities, Financing Activities"
+  },
+  {
+   "fieldname": "section_footer",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Section Footer (Total Label)",
+   "description": "E.g. 'Net Cash from Operating Activities'"
+  },
+  {
+   "fieldname": "cb1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_leader",
+   "fieldtype": "Data",
+   "label": "Section Leader",
+   "description": "Sub-header immediately after Net Profit (Operating Activities only). E.g. 'Adjustments for Non-Cash Items'"
+  },
+  {
+   "fieldname": "section_subtotal",
+   "fieldtype": "Data",
+   "label": "Section Subtotal",
+   "description": "Label for the non-cash adjustments subtotal (Operating Activities only). E.g. 'Cash from Operations before Working Capital Changes'"
+  },
+  {
+   "fieldname": "section_mappings",
+   "fieldtype": "Section Break",
+   "label": "Mappings"
+  },
+  {
+   "fieldname": "mapping",
+   "fieldtype": "Table",
+   "label": "Cash Flow Mappings",
+   "options": "Cash Flow Mapper Item"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Periodic Accounting",
+ "name": "Cash Flow Mapper",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts User"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

@@ -1,0 +1,20 @@
+{
+ "creation": "2026-07-09 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "fa fa-tint",
+ "idx": 0,
+ "modified": "2026-07-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Periodic Accounting",
+ "name": "cash-flow-guide",
+ "owner": "Administrator",
+ "page_name": "cash-flow-guide",
+ "roles": [
+  {"role": "Accounts Manager"},
+  {"role": "Accounts User"},
+  {"role": "Stock Manager"}
+ ],
+ "standard": "Yes",
+ "title": "Cash Flow Report Configuration Guide"
+}
