@@ -1,0 +1,167 @@
+[
+ {
+  "charts": [],
+  "content": "[{\"id\": \"hdr1\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Periodic Accounting</b></span>\", \"col\": 12}}, {\"id\": \"sc_AuditTradin\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Audit Trading Account Report\", \"col\": 3}}, {\"id\": \"sc_StandardCas\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Standard Cash Flow Report\", \"col\": 3}}, {\"id\": \"sc_PeriodicBal\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Periodic Balance Sheet\", \"col\": 3}}, {\"id\": \"sc_PeriodicGro\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Periodic Gross and Net Profit\", \"col\": 3}}, {\"id\": \"sp1\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"hdr2\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports & Masters</b></span>\", \"col\": 12}}, {\"id\": \"cd_Trading&CO\", \"type\": \"card\", \"data\": {\"card_name\": \"Trading & COGS\", \"col\": 4}}, {\"id\": \"cd_FinancialSt\", \"type\": \"card\", \"data\": {\"card_name\": \"Financial Statements\", \"col\": 4}}, {\"id\": \"cd_CashFlowSe\", \"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow Setup\", \"col\": 4}}]",
+  "custom_blocks": [],
+  "doctype": "Workspace",
+  "icon": "accounting",
+  "is_hidden": 0,
+  "label": "Periodic Accounting",
+  "links": [
+   {
+    "hidden": 0,
+    "label": "Trading & COGS",
+    "link_count": 5,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Audit Trading Account Report",
+    "link_to": "Audit Trading Account Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Realtime Trading Account Report",
+    "link_to": "Realtime Trading Account Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Item COGS Analysis Report",
+    "link_to": "Item COGS Analysis Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Purchase Stock Entries",
+    "link_to": "Purchase Stock Entries",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Sales Stock Entries",
+    "link_to": "Sales Stock Entries",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "label": "Financial Statements",
+    "link_count": 4,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Standard Cash Flow Report",
+    "link_to": "Standard Cash Flow Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Periodic Balance Sheet",
+    "link_to": "Periodic Balance Sheet",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Periodic Gross and Net Profit",
+    "link_to": "Periodic Gross and Net Profit",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Mapped Financial Report",
+    "link_to": "Mapped Financial Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "label": "Cash Flow Setup",
+    "link_count": 2,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Cash Flow Mapper",
+    "link_to": "Cash Flow Mapper",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Cash Flow Mapping",
+    "link_to": "Cash Flow Mapping",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   }
+  ],
+  "module": "Periodic Accounting",
+  "name": "Periodic Accounting",
+  "number_cards": [],
+  "public": 1,
+  "quick_lists": [],
+  "roles": [],
+  "sequence_id": 25.0,
+  "shortcuts": [
+   {
+    "doc_view": "",
+    "label": "Audit Trading Account Report",
+    "link_to": "Audit Trading Account Report",
+    "type": "Report"
+   },
+   {
+    "doc_view": "",
+    "label": "Standard Cash Flow Report",
+    "link_to": "Standard Cash Flow Report",
+    "type": "Report"
+   },
+   {
+    "doc_view": "",
+    "label": "Periodic Balance Sheet",
+    "link_to": "Periodic Balance Sheet",
+    "type": "Report"
+   },
+   {
+    "doc_view": "",
+    "label": "Periodic Gross and Net Profit",
+    "link_to": "Periodic Gross and Net Profit",
+    "type": "Report"
+   }
+  ],
+  "title": "Periodic Accounting"
+ }
+]

@@ -1,7 +1,8 @@
 app_name = "periodic_accounting"
 
 fixtures = [
-	{"dt": "Custom Field", "filters": [["dt", "=", "Warehouse"]]}
+	{"dt": "Custom Field", "filters": [["dt", "=", "Warehouse"]]},
+	{"dt": "Workspace", "filters": [["module", "=", "Periodic Accounting"]]},
 ]
 app_title = "Periodic Accounting"
 app_publisher = "siva"
