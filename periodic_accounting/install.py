@@ -124,11 +124,10 @@ def _ensure_mapping(name, label, calculation_type, is_working_capital, accounts)
         return
     try:
         doc = frappe.new_doc("Cash Flow Mapping")
-        doc.name               = name
+        doc.mapping_name       = name   # autoname: field:mapping_name
         doc.label              = label
         doc.calculation_type   = calculation_type
         doc.is_working_capital = is_working_capital
-        doc.accounts           = accounts
         doc.flags.ignore_permissions = True
         doc.insert(ignore_permissions=True)
         print(f"[periodic_accounting] Created Cash Flow Mapping: {name}")

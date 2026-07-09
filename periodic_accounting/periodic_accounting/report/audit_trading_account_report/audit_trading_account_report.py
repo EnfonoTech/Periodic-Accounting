@@ -2,6 +2,8 @@
 Audit Trading Account Report — Perpetual Inventory
 Concise single-page trading account; optional breakdown by Warehouse or Item Group.
 """
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import flt, getdate, today, add_days
@@ -59,6 +61,44 @@ def _sb(co, date, wh=None):
 
 def _sr(co, fd, td):
     return _url("Sales Register", {"company": co, "from_date": fd, "to_date": td})
+
+
+def _pi_list(co, fd, td, company_cur, kind):
+    """List-view drill-down: all Purchase Invoices behind a purchase row."""
+    p = {
+        "company": co,
+        "posting_date": json.dumps(["between", [fd, td]]),
+        "docstatus": 1,
+    }
+    if kind == "local":
+        p["currency"] = company_cur
+        p["is_return"] = 0
+    elif kind == "import":
+        p["currency"] = json.dumps(["!=", company_cur])
+        p["is_return"] = 0
+    elif kind == "return":
+        p["is_return"] = 1
+    return f"/app/purchase-invoice?{urlencode(p)}"
+
+
+def _lcv_list(co, fd, td):
+    p = {
+        "company": co,
+        "posting_date": json.dumps(["between", [fd, td]]),
+        "docstatus": 1,
+    }
+    return f"/app/landed-cost-voucher?{urlencode(p)}"
+
+
+def lcv_charges(co, fd, td):
+    """Total Landed Cost Voucher charges in the period (already baked into
+    item valuation / purchase figures above via repost — informational)."""
+    r = frappe.db.sql("""
+        SELECT COALESCE(SUM(total_taxes_and_charges), 0) AS v
+        FROM `tabLanded Cost Voucher`
+        WHERE company=%s AND posting_date BETWEEN %s AND %s AND docstatus=1
+    """, (co, fd, td), as_dict=True)
+    return flt(r[0].v) if r else 0.0
 
 
 # ── SLE / GL aggregation ──────────────────────────────────────────────────────
@@ -461,18 +501,23 @@ def build_main(co, fd, td, wh, cc):
         R("Purchases  ← PI  (with Update Stock)", bold=True, indent=1),
     ]
 
+    lcv_chg = lcv_charges(co, fd, td)
+
     if local_pur:
         rows.append(R("Local Purchases",
-                      debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
+                      debit=local_pur, indent=2, link=_pi_list(co, fd, td, currency, "local")))
     if import_pur:
         rows.append(R("Import Purchases  (foreign currency)",
-                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
+                      debit=import_pur, indent=2, link=_pi_list(co, fd, td, currency, "import")))
     if lcv:
         rows.append(R("Landed Cost Vouchers",
-                      debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
+                      debit=lcv, indent=2, link=_lcv_list(co, fd, td)))
+    if lcv_chg and not lcv:
+        rows.append(R("of which: Landed Cost Charges  (freight/customs — included above)",
+                      debit=lcv_chg, indent=3, link=_lcv_list(co, fd, td)))
     if pur_ret:
         rows.append(R("Less: Returns",
-                      credit=pur_ret, indent=2, link=_sl(co, fd, td, wh)))
+                      credit=pur_ret, indent=2, link=_pi_list(co, fd, td, currency, "return")))
 
     rows.append(R("Net Purchases  (with Update Stock)",
                   debit=net_pur, bold=True, indent=1, row_type="subtotal"))
@@ -481,13 +526,17 @@ def build_main(co, fd, td, wh, cc):
     rows.append(R("Purchases  ← PI  (without Update Stock, stocked items)", bold=True, indent=1))
 
     if pi_no_local:
-        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2))
+        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2,
+                      link=_pi_list(co, fd, td, currency, "local")))
     if pi_no_import:
-        rows.append(R("Import Purchases  (foreign currency)", debit=pi_no_import, indent=2))
+        rows.append(R("Import Purchases  (foreign currency)", debit=pi_no_import, indent=2,
+                      link=_pi_list(co, fd, td, currency, "import")))
     if pi_no_lcv:
-        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2))
+        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2,
+                      link=_lcv_list(co, fd, td)))
     if pi_no_ret:
-        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2))
+        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2,
+                      link=_pi_list(co, fd, td, currency, "return")))
 
     rows.append(R("Net Purchases  (without Update Stock)",
                   debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))

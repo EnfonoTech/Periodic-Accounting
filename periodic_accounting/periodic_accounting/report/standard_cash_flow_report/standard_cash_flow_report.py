@@ -147,7 +147,9 @@ def _accts_by_type(co, account_type):
 # ── mapper helpers ────────────────────────────────────────────────────────────
 
 def _mappers_configured():
-    if not frappe.db.table_exists("tabCash Flow Mapper"):
+    # NOTE: table_exists() prepends "tab" itself — passing "tabCash Flow Mapper"
+    # checked for "tabtabCash Flow Mapper" and silently disabled mappers forever.
+    if not frappe.db.table_exists("Cash Flow Mapper"):
         return False
     if not frappe.db.exists("Cash Flow Mapper", "Operating Activities"):
         return False
