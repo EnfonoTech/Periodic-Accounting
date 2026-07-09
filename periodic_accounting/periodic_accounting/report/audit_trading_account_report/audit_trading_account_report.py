@@ -445,6 +445,8 @@ def build_main(co, fd, td, wh, cc):
     opening_date = str(add_days(fd, -1))
     currency     = frappe.db.get_value("Company", co, "default_currency") or ""
 
+    pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
+
     rows = [
         R("SALES", bold=True, row_type="section"),
         R("Gross Sales Revenue",          credit=g_sales,   indent=1, link=_sr(co, fd, td)),
@@ -452,12 +454,46 @@ def build_main(co, fd, td, wh, cc):
         R("NET SALES",                    credit=net_sales, bold=True, row_type="net_sales"),
         S(),
 
-        # ── COGS formula — compact, one net-purchases line ────────────────────
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
-        R("Opening Stock",      debit=op,           indent=1, link=_sb(co, opening_date, wh)),
-        R("Net Purchases",      debit=net_pur,       indent=1, link=_sl(co, fd, td, wh)),
-        R("Goods Available for Sale", debit=goods_avail, indent=1),
+        R("Opening Stock", debit=op, indent=1, link=_sb(co, opening_date, wh)),
+
+        # ── Purchases with update stock ───────────────────────────────────────
+        R("Purchases  ← PI  (with Update Stock)", bold=True, indent=1),
     ]
+
+    if local_pur:
+        rows.append(R("Local Purchases",
+                      debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
+    if import_pur:
+        rows.append(R("Import Purchases  (foreign currency)",
+                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
+    if lcv:
+        rows.append(R("Landed Cost Vouchers",
+                      debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
+    if pur_ret:
+        rows.append(R("Less: Returns",
+                      credit=pur_ret, indent=2, link=_sl(co, fd, td, wh)))
+
+    rows.append(R("Net Purchases  (with Update Stock)",
+                  debit=net_pur, bold=True, indent=1, row_type="subtotal"))
+
+    # ── Purchases without update stock (stocked items — shown for visibility) ─
+    rows.append(R("Purchases  ← PI  (without Update Stock, stocked items)", bold=True, indent=1))
+
+    if pi_no_local:
+        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2))
+    if pi_no_import:
+        rows.append(R("Import Purchases  (foreign currency)", debit=pi_no_import, indent=2))
+    if pi_no_lcv:
+        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2))
+    if pi_no_ret:
+        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2))
+
+    rows.append(R("Net Purchases  (without Update Stock)",
+                  debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
+
+    # ── COGS formula continues with SLE-based goods available ─────────────────
+    rows.append(R("Goods Available for Sale", debit=goods_avail, indent=1))
 
     if recon:
         if recon > 0:
@@ -477,44 +513,6 @@ def build_main(co, fd, td, wh, cc):
           bold=True, row_type="gross_profit"),
         S(),
     ]
-
-    # ── Purchase Split — all purchases, both with and without update stock ────
-    rows.append(H("PURCHASE SPLIT"))
-
-    # With update stock (SLE-based — PI with update_stock=1 + LCV)
-    rows.append(R("With Update Stock  (PI)", bold=True, indent=1))
-    if local_pur:
-        rows.append(R("Local Purchases",   debit=local_pur, indent=2, link=_sl(co, fd, td, wh)))
-    if import_pur:
-        rows.append(R("Import Purchases  (foreign currency)",
-                      debit=import_pur, indent=2, link=_sl(co, fd, td, wh)))
-    if lcv:
-        rows.append(R("Landed Cost Vouchers", debit=lcv, indent=2, link=_sl(co, fd, td, wh)))
-    if pur_ret:
-        rows.append(R("Less: Returns", credit=pur_ret, indent=2, link=_sl(co, fd, td, wh)))
-    rows.append(R("Net  (with Update Stock)", debit=net_pur, bold=True, indent=2,
-                  row_type="subtotal"))
-
-    # Without update stock (PI item table — stocked items only)
-    pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
-    rows.append(S())
-    rows.append(R("Without Update Stock  (PI, stocked items)", bold=True, indent=1))
-    if pi_no_local:
-        rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2))
-    if pi_no_import:
-        rows.append(R("Import Purchases  (foreign currency)",
-                      debit=pi_no_import, indent=2))
-    if pi_no_lcv:
-        rows.append(R("Landed Cost Vouchers", debit=pi_no_lcv, indent=2))
-    if pi_no_ret:
-        rows.append(R("Less: Returns", credit=pi_no_ret, indent=2))
-    rows.append(R("Net  (without Update Stock)", debit=pi_no_net, bold=True, indent=2,
-                  row_type="subtotal"))
-
-    rows.append(S())
-    rows.append(R("TOTAL PURCHASES  (with + without Update Stock)",
-                  debit=net_pur + pi_no_net, bold=True, row_type="subtotal"))
-    rows.append(S())
 
     # ── GL Reconciliation ─────────────────────────────────────────────────────
     rows += [
