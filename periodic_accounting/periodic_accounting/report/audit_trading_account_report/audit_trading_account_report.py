@@ -471,11 +471,12 @@ def build_main(co, fd, td, wh, cc):
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
     recon   = stock_recon_adjustment(co, fd, td, wh)
-    local_pur, import_pur, lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
+    local_pur, import_pur, _lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
 
-    # Formula per COGS Reconciliation doc:
-    # COGS = Opening + Local (PI) + Import (PI) + LCV − Returns − Closing
-    net_pur      = local_pur + import_pur + lcv - pur_ret
+    # Formula: COGS = Opening + Local (PI) + Import (PI) − Returns − Closing
+    # LCV adjusts stock valuation directly (via SLE repost), so its effect
+    # flows through the opening/closing stock difference automatically.
+    net_pur      = local_pur + import_pur - pur_ret
     goods_avail  = op + net_pur
     formula_cogs = goods_avail + recon - cl
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
@@ -498,8 +499,6 @@ def build_main(co, fd, td, wh, cc):
         R("Purchases", bold=True, indent=1),
     ]
 
-    lcv_chg = lcv_charges(co, fd, td)
-
     if local_pur:
         rows.append(R("Local Purchases  (PI — company currency)",
                       debit=local_pur, indent=2,
@@ -508,9 +507,6 @@ def build_main(co, fd, td, wh, cc):
         rows.append(R("Import Purchases  (PI — foreign currency)",
                       debit=import_pur, indent=2,
                       link=_pi_drill(co, fd, td, wh, txn="Purchases", ctype="Import")))
-    if lcv:
-        rows.append(R("Landed Cost Vouchers",
-                      debit=lcv, indent=2, link=_lcv_drill(co, fd, td, wh)))
     if pur_ret:
         rows.append(R("Less: Purchase Returns",
                       credit=pur_ret, indent=2,
@@ -529,12 +525,15 @@ def build_main(co, fd, td, wh, cc):
                           credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, td, td, wh)),
-        R("NET COGS  (Calculated — Trading Formula)", debit=formula_cogs, bold=True, row_type="net_cogs"),
+        R("Less: Closing Stock", credit=cl, indent=1, link=_sb(co, td, td, wh)),
+        R("NET COGS  (Calculated — Trading Formula)",
+          debit =formula_cogs if formula_cogs >= 0 else 0,
+          credit=abs(formula_cogs) if formula_cogs <  0 else 0,
+          bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT" if gross_profit >= 0 else "GROSS LOSS",
-          debit =gross_profit if gross_profit <  0 else 0,
-          credit=gross_profit if gross_profit >= 0 else 0,
+          debit =abs(gross_profit) if gross_profit <  0 else 0,
+          credit=gross_profit       if gross_profit >= 0 else 0,
           bold=True, row_type="gross_profit"),
         S(),
     ]
@@ -563,8 +562,8 @@ def build_warehouse_breakdown(co, fd, td, cc):
     for wh in warehouses:
         op   = opening_stock(co, fd, wh)
         cl   = closing_stock(co, td, wh)
-        loc, imp, lcv, pur_ret = purchase_split(co, fd, td, wh)
-        net_pur = loc + imp + lcv - pur_ret
+        loc, imp, _lcv, pur_ret = purchase_split(co, fd, td, wh)
+        net_pur = loc + imp - pur_ret
         cogs    = flt(op + net_pur - cl, 3)
 
         if op == 0 and net_pur == 0 and cl == 0:
