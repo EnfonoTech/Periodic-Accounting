@@ -40,13 +40,6 @@ frappe.query_reports["Audit Trading Account Report"] = {
 				return { filters: { company: frappe.query_report.get_filter_value("company") } };
 			},
 		},
-		{
-			fieldname: "breakdown_by",
-			label: __("Breakdown By"),
-			fieldtype: "Select",
-			options: "\nWarehouse\nItem Group",
-			default: "",
-		},
 	],
 
 	"formatter": function (value, row, column, data, default_formatter) {
@@ -61,16 +54,16 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			if (fn === "particulars") {
 				return `<strong style="color:#1a237e;font-size:12px;letter-spacing:.04em">${value}</strong>`;
 			}
-			return value;
+			return "";   // suppress 0.00 on Dr/Cr for header rows
 		}
 
-		// ── Secondary section headers (GL Reconciliation, Breakdown by…) ─────
+		// ── Secondary section headers (Breakdown by…) ────────────────────────
 		if (rt === "recon_header") {
 			if (fn === "particulars") {
 				const clean = (data.particulars || "").replace(/^── /, "").replace(/ ─+$/, "");
 				return `<strong style="color:#455a64">${clean}</strong>`;
 			}
-			return value;
+			return "";   // suppress 0.00 on Dr/Cr for header rows
 		}
 
 		// ── Warehouse / Item Group sub-headers ────────────────────────────────

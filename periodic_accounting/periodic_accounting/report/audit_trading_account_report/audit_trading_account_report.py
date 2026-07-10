@@ -22,17 +22,10 @@ def execute(filters=None):
         return columns, [], None, None, None
 
     fd = str(fd); td = str(td)
-    wh        = filters.get("warehouse")
-    cc        = filters.get("cost_center")
-    breakdown = filters.get("breakdown_by") or ""
+    wh = filters.get("warehouse")
+    cc = filters.get("cost_center")
 
     rows, kv = build_main(co, fd, td, wh, cc)
-
-    if breakdown == "Warehouse" and not wh:
-        rows += build_warehouse_breakdown(co, fd, td, cc)
-    elif breakdown == "Item Group":
-        rows += build_item_group_breakdown(co, fd, td, wh, cc)
-
     return columns, rows, None, _make_chart(kv), _make_summary(kv)
 
 
@@ -55,7 +48,6 @@ def _sl(co, fd, td, wh=None):
     return _url("Stock Ledger", p)
 
 def _sb(co, fd, td, wh=None):
-    # Stock Balance filters are from_date/to_date — mirror the report's own dates
     p = {"company": co, "from_date": str(fd), "to_date": str(td)}
     if wh: p["warehouse"] = wh
     return _url("Stock Balance", p)
@@ -71,6 +63,19 @@ def _pse(co, fd, td, wh=None, ptype=None):
 
 def _sr(co, fd, td):
     return _url("Sales Register", {"company": co, "from_date": fd, "to_date": td})
+
+def _pi_drill(co, fd, td, wh=None, txn="All", ctype="All"):
+    p = {"company": co, "from_date": fd, "to_date": td,
+         "transaction": txn, "currency_type": ctype}
+    if wh:
+        p["warehouse"] = wh
+    return _url("Purchase Invoice Stocked Items", p)
+
+def _lcv_drill(co, fd, td, wh=None):
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if wh:
+        p["warehouse"] = wh
+    return _url("Landed Cost Voucher Drill", p)
 
 
 def _pi_list(co, fd, td, company_cur, kind):
@@ -180,55 +185,56 @@ def closing_stock(co, td, wh=None):
 
 def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     """
-    Purchase breakdown for stocked items (is_stock_item=1) only.
+    Purchase breakdown per the COGS Reconciliation document logic.
 
-    With update stock (SLE — PI with update_stock=1 only):
-        local_pur, import_pur  — by currency
-        lcv                    — LCV linked to PI-with-update-stock
-        pur_ret                — returns (PI credit notes)
+    Source for local_pur / import_pur / pur_ret:
+        ALL submitted Purchase Invoices (with AND without update_stock),
+        stocked items only (is_stock_item=1), base_net_amount (VAT excluded),
+        split local / import by pi.currency vs company default currency.
 
-    Without update stock (PI with update_stock=0, stocked items):
-        pi_no_local, pi_no_import — by currency
-        pi_no_lcv                 — LCV linked to those PI-without-update-stock
-        pi_no_ret                 — returns
+    Source for lcv:
+        Stock Ledger Entries with voucher_type='Landed Cost Voucher',
+        for stocked items — always SLE-based because LCV always updates stock.
+
+    Formula COGS = Opening + local_pur + import_pur + lcv - pur_ret - Closing
+    If Difference (Formula COGS - GL COGS) != 0, it flags PI-without-update-stock
+    or other posting gaps.
     """
     company_cur = frappe.db.get_value("Company", co, "default_currency") or ""
-    j, c, p = _wh_base(co, wh)
 
-    vno = ""
-    vp  = []
+    # ── Warehouse clause for PI items ─────────────────────────────────────────
+    wh_clause = "AND pii.warehouse = %s" if wh else ""
+    wh_param  = [wh] if wh else []
+
+    vno_pi = ""
+    vp_pi  = []
     if cc_vnos is not None:
-        if not cc_vnos:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        ph  = ",".join(["%s"]*len(cc_vnos))
-        vno = f" AND sle.voucher_no IN ({ph})"
-        vp  = list(cc_vnos)
+        if cc_vnos:
+            ph     = ",".join(["%s"] * len(cc_vnos))
+            vno_pi = f"AND pi.name IN ({ph})"
+            vp_pi  = list(cc_vnos)
+        else:
+            vno_pi = "AND 1=0"
 
-    base = " AND ".join(c) + f" AND sle.posting_date BETWEEN %s AND %s {vno}"
-    bp   = p + [fd, td] + vp
-
-    # ── SLE-based purchases (Purchase Invoice with update_stock=1), by currency ─
-    sle_rows = frappe.db.sql(
-        f"""SELECT
-                COALESCE(pi.currency, %s)                        AS cur,
-                COALESCE(SUM(CASE WHEN sle.stock_value_difference > 0
-                             THEN sle.stock_value_difference ELSE 0 END), 0) AS gross,
-                COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0
-                             THEN sle.stock_value_difference ELSE 0 END)), 0) AS ret
-            FROM `tabStock Ledger Entry` sle {j}
-            INNER JOIN `tabItem` itm
-                ON itm.name=sle.item_code AND itm.is_stock_item=1
-            INNER JOIN `tabPurchase Invoice` pi
-                ON pi.name=sle.voucher_no
-            WHERE {base}
-              AND sle.voucher_type='Purchase Invoice'
-              AND sle.is_cancelled=0
-            GROUP BY cur""",
-        [company_cur] + bp, as_dict=True,
-    )
+    # ALL PI (with + without update_stock), stocked items, split by currency
+    pi_rows = frappe.db.sql(f"""
+        SELECT
+            COALESCE(pi.currency, %s)                                              AS cur,
+            COALESCE(SUM(CASE WHEN pi.is_return=0 THEN pii.base_net_amount ELSE 0 END), 0) AS gross,
+            COALESCE(ABS(SUM(CASE WHEN pi.is_return=1 THEN pii.base_net_amount ELSE 0 END)), 0) AS ret
+        FROM `tabPurchase Invoice Item` pii
+        INNER JOIN `tabPurchase Invoice` pi  ON pi.name = pii.parent
+        INNER JOIN `tabItem`             itm ON itm.name = pii.item_code
+        WHERE pi.company = %s
+          AND pi.posting_date BETWEEN %s AND %s
+          AND pi.docstatus = 1
+          AND itm.is_stock_item = 1
+          {wh_clause} {vno_pi}
+        GROUP BY pi.currency
+    """, [company_cur, co, fd, td] + wh_param + vp_pi, as_dict=True)
 
     local_pur = import_pur = pur_ret = 0.0
-    for row in sle_rows:
+    for row in pi_rows:
         is_foreign = (row.cur or company_cur) != company_cur
         if is_foreign:
             import_pur += flt(row.gross)
@@ -236,82 +242,36 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
             local_pur  += flt(row.gross)
         pur_ret += flt(row.ret)
 
-    # Subquery to identify LCVs linked to PI-without-update-stock
-    _pi_no_lcv_subq = """
-        SELECT 1 FROM `tabLanded Cost Purchase Receipt` lcpr
-        INNER JOIN `tabPurchase Invoice` pi2
-            ON pi2.name=lcpr.receipt_document
-            AND lcpr.receipt_document_type='Purchase Invoice'
-            AND pi2.update_stock=0
-        WHERE lcpr.parent=sle.voucher_no
-    """
-
-    # ── LCV linked to PR / PI-with-update-stock ───────────────────────────────
-    lcv_r = frappe.db.sql(f"""
-        SELECT COALESCE(SUM(sle.stock_value_difference), 0) AS v
-        FROM `tabStock Ledger Entry` sle {j}
-        INNER JOIN `tabItem` itm ON itm.name=sle.item_code AND itm.is_stock_item=1
-        WHERE {base}
-          AND sle.voucher_type='Landed Cost Voucher'
-          AND sle.is_cancelled=0
-          AND NOT EXISTS ({_pi_no_lcv_subq})
-    """, bp, as_dict=True)
+    # ── LCV: from LCV document taxes (not SLE) ───────────────────────────────
+    # ERPNext updates the source PI's SLE valuation directly on LCV submit
+    # rather than creating separate SLE with voucher_type='Landed Cost Voucher'.
+    # Querying LCV.taxes gives the correct charged amount.
+    if wh:
+        # Only LCVs that cover items in the specified warehouse
+        lcv_r = frappe.db.sql("""
+            SELECT COALESCE(SUM(lcvt.amount), 0) AS v
+            FROM `tabLanded Cost Voucher` lcv
+            INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
+            WHERE lcv.company = %s
+              AND lcv.posting_date BETWEEN %s AND %s
+              AND lcv.docstatus = 1
+              AND EXISTS (
+                  SELECT 1 FROM `tabLanded Cost Item` lci
+                  WHERE lci.parent = lcv.name AND lci.warehouse = %s
+              )
+        """, [co, fd, td, wh], as_dict=True)
+    else:
+        lcv_r = frappe.db.sql("""
+            SELECT COALESCE(SUM(lcvt.amount), 0) AS v
+            FROM `tabLanded Cost Voucher` lcv
+            INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
+            WHERE lcv.company = %s
+              AND lcv.posting_date BETWEEN %s AND %s
+              AND lcv.docstatus = 1
+        """, [co, fd, td], as_dict=True)
     lcv = flt(lcv_r[0].v) if lcv_r else 0.0
 
-    # ── LCV linked to PI-without-update-stock ─────────────────────────────────
-    pi_no_lcv_r = frappe.db.sql(f"""
-        SELECT COALESCE(SUM(sle.stock_value_difference), 0) AS v
-        FROM `tabStock Ledger Entry` sle {j}
-        INNER JOIN `tabItem` itm ON itm.name=sle.item_code AND itm.is_stock_item=1
-        WHERE {base}
-          AND sle.voucher_type='Landed Cost Voucher'
-          AND sle.is_cancelled=0
-          AND EXISTS ({_pi_no_lcv_subq})
-    """, bp, as_dict=True)
-    pi_no_lcv = flt(pi_no_lcv_r[0].v) if pi_no_lcv_r else 0.0
-
-    # ── PI without update_stock, stocked items — local/import from PI table ───
-    wh_clause_no = "AND pii.warehouse=%s" if wh else ""
-    wh_param_no  = [wh] if wh else []
-
-    vno_pi = ""
-    vp_pi  = []
-    if cc_vnos is not None:
-        if cc_vnos:
-            ph     = ",".join(["%s"]*len(cc_vnos))
-            vno_pi = f"AND pi.name IN ({ph})"
-            vp_pi  = list(cc_vnos)
-        else:
-            vno_pi = "AND 1=0"
-
-    pi_no_rows = frappe.db.sql(f"""
-        SELECT
-            COALESCE(pi.currency, %s)                                              AS cur,
-            COALESCE(SUM(CASE WHEN pi.is_return=0 THEN pii.base_net_amount ELSE 0 END), 0) AS gross,
-            COALESCE(ABS(SUM(CASE WHEN pi.is_return=1 THEN pii.base_net_amount ELSE 0 END)), 0) AS ret
-        FROM `tabPurchase Invoice Item` pii
-        INNER JOIN `tabPurchase Invoice` pi  ON pi.name=pii.parent
-        INNER JOIN `tabItem`             itm ON itm.name=pii.item_code
-        WHERE pi.company=%s
-          AND pi.posting_date BETWEEN %s AND %s
-          AND pi.docstatus=1
-          AND pi.update_stock=0
-          AND itm.is_stock_item=1
-          {wh_clause_no} {vno_pi}
-        GROUP BY pi.currency
-    """, [company_cur, co, fd, td] + wh_param_no + vp_pi, as_dict=True)
-
-    pi_no_local = pi_no_import = pi_no_ret = 0.0
-    for row in pi_no_rows:
-        is_foreign = (row.cur or company_cur) != company_cur
-        if is_foreign:
-            pi_no_import += flt(row.gross)
-        else:
-            pi_no_local  += flt(row.gross)
-        pi_no_ret += flt(row.ret)
-
-    return (local_pur, import_pur, lcv, pur_ret,
-            pi_no_local, pi_no_import, pi_no_lcv, pi_no_ret)
+    return local_pur, import_pur, lcv, pur_ret
 
 
 def sales_data(co, fd, td, cc=None):
@@ -411,8 +371,40 @@ def ig_figures(co, fd, td, wh, ig):
         return flt(r[0].v) if r else 0.0
 
     opening_v = s("AND sle.posting_date<%s", [fd], [])
-    net_pur_v = s("AND sle.posting_date BETWEEN %s AND %s", [fd, td],
-                  ["Purchase Receipt", "Landed Cost Voucher", "Purchase Invoice"])
+
+    # Purchases: PI base_net_amount for stocked items (consistent with report formula)
+    r_pi = frappe.db.sql("""
+        SELECT
+            COALESCE(SUM(CASE WHEN pi.is_return=0 THEN pii.base_net_amount ELSE 0 END), 0) AS gross,
+            COALESCE(ABS(SUM(CASE WHEN pi.is_return=1 THEN pii.base_net_amount ELSE 0 END)), 0) AS ret
+        FROM `tabPurchase Invoice Item` pii
+        INNER JOIN `tabPurchase Invoice` pi  ON pi.name = pii.parent
+        INNER JOIN `tabItem`             itm ON itm.name = pii.item_code
+        WHERE pi.company = %s
+          AND pi.posting_date BETWEEN %s AND %s
+          AND pi.docstatus = 1
+          AND itm.is_stock_item = 1
+          AND itm.item_group = %s
+    """, [co, fd, td, ig], as_dict=True)
+    pi_gross  = flt(r_pi[0].gross) if r_pi else 0.0
+    pi_ret    = flt(r_pi[0].ret)   if r_pi else 0.0
+
+    # LCV: from LCV document taxes for this item group
+    lcv_res = frappe.db.sql("""
+        SELECT COALESCE(SUM(lcvt.amount * lci.amount / NULLIF(lcv_total.total,0)), 0) AS v
+        FROM `tabLanded Cost Voucher` lcv
+        INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
+        INNER JOIN `tabLanded Cost Item` lci ON lci.parent = lcv.name
+        INNER JOIN `tabItem` itm ON itm.name = lci.item_code AND itm.item_group = %s
+        INNER JOIN (
+            SELECT parent, SUM(amount) AS total FROM `tabLanded Cost Item` GROUP BY parent
+        ) lcv_total ON lcv_total.parent = lcv.name
+        WHERE lcv.company = %s
+          AND lcv.posting_date BETWEEN %s AND %s
+          AND lcv.docstatus = 1
+    """, [ig, co, fd, td], as_dict=True)
+    lcv_v = flt(lcv_res[0].v) if lcv_res else 0.0
+    net_pur_v = pi_gross + lcv_v - pi_ret
 
     if getdate(td) >= getdate(today()):
         if wh:
@@ -479,23 +471,17 @@ def build_main(co, fd, td, wh, cc):
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
     recon   = stock_recon_adjustment(co, fd, td, wh)
-    (local_pur, import_pur, lcv, pur_ret,
-     pi_no_local, pi_no_import, pi_no_lcv, pi_no_ret) = purchase_split(co, fd, td, wh, cc_vnos)
+    local_pur, import_pur, lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
 
+    # Formula per COGS Reconciliation doc:
+    # COGS = Opening + Local (PI) + Import (PI) + LCV − Returns − Closing
     net_pur      = local_pur + import_pur + lcv - pur_ret
     goods_avail  = op + net_pur
     formula_cogs = goods_avail + recon - cl
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
-    gl_cogs      = gl_cogs_total(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
-    cogs_var     = flt(formula_cogs - gl_cogs, 3)
-    bin_val      = closing_stock(co, td)
-    gl_stock     = stock_gl_balance(co)
-    bin_gl_var   = flt(bin_val - gl_stock, 3)
     opening_date = str(add_days(fd, -1))
     currency     = frappe.db.get_value("Company", co, "default_currency") or ""
-
-    pi_no_net = pi_no_local + pi_no_import + pi_no_lcv - pi_no_ret
 
     rows = [
         R("SALES", bold=True, row_type="section"),
@@ -508,52 +494,31 @@ def build_main(co, fd, td, wh, cc):
         R("Opening Stock", debit=op, indent=1,
           link=_sb(co, opening_date, opening_date, wh)),
 
-        # ── Purchases (realtime-report format) ────────────────────────────────
-        R("Purchases  ← SLE", bold=True, indent=1),
+        # ── Purchases (ALL PI, with + without update_stock) ──────────────────
+        R("Purchases", bold=True, indent=1),
     ]
 
     lcv_chg = lcv_charges(co, fd, td)
 
     if local_pur:
-        rows.append(R("Local Purchases",
-                      debit=local_pur, indent=2, link=_pse(co, fd, td, wh, "Local")))
+        rows.append(R("Local Purchases  (PI — company currency)",
+                      debit=local_pur, indent=2,
+                      link=_pi_drill(co, fd, td, wh, txn="Purchases", ctype="Local")))
     if import_pur:
-        rows.append(R("Import Purchases",
-                      debit=import_pur, indent=2, link=_pse(co, fd, td, wh, "Import")))
+        rows.append(R("Import Purchases  (PI — foreign currency)",
+                      debit=import_pur, indent=2,
+                      link=_pi_drill(co, fd, td, wh, txn="Purchases", ctype="Import")))
     if lcv:
-        rows.append(R("Landing Costs (LCV)",
-                      debit=lcv, indent=2, link=_pse(co, fd, td, wh, "Landed Cost")))
-    if lcv_chg and not lcv:
-        rows.append(R("of which: Landed Cost Charges  (freight/customs — included above)",
-                      debit=lcv_chg, indent=3, link=_lcv_list(co, fd, td)))
+        rows.append(R("Landed Cost Vouchers",
+                      debit=lcv, indent=2, link=_lcv_drill(co, fd, td, wh)))
     if pur_ret:
         rows.append(R("Less: Purchase Returns",
-                      credit=pur_ret, indent=2, link=_pse(co, fd, td, wh, "Returns")))
+                      credit=pur_ret, indent=2,
+                      link=_pi_drill(co, fd, td, wh, txn="Returns", ctype="All")))
 
-    rows.append(R("Net Purchases", debit=net_pur, bold=True, indent=1, row_type="subtotal"))
-
-    # ── Purchases without update stock (non-SLE, stocked items) — only when present ─
-    if pi_no_local or pi_no_import or pi_no_lcv or pi_no_ret:
-        rows.append(R("Purchases  ← PI  (without Update Stock, stocked items)", bold=True, indent=1))
-
-        if pi_no_local:
-            rows.append(R("Local Purchases",   debit=pi_no_local,  indent=2,
-                          link=_pi_list(co, fd, td, currency, "local")))
-        if pi_no_import:
-            rows.append(R("Import Purchases", debit=pi_no_import, indent=2,
-                          link=_pi_list(co, fd, td, currency, "import")))
-        if pi_no_lcv:
-            rows.append(R("Landing Costs (LCV)", debit=pi_no_lcv, indent=2,
-                          link=_lcv_list(co, fd, td)))
-        if pi_no_ret:
-            rows.append(R("Less: Purchase Returns", credit=pi_no_ret, indent=2,
-                          link=_pi_list(co, fd, td, currency, "return")))
-
-        rows.append(R("Net Purchases  (without Update Stock)",
-                      debit=pi_no_net, bold=True, indent=1, row_type="subtotal"))
-
-    # ── COGS formula continues with SLE-based goods available ─────────────────
-    rows.append(R("Goods Available for Sale", debit=goods_avail, indent=1))
+    rows.append(R("Net Purchases",
+                  debit=net_pur, bold=True, indent=1, row_type="subtotal",
+                  link=_pi_drill(co, fd, td, wh)))
 
     if recon:
         if recon > 0:
@@ -564,33 +529,14 @@ def build_main(co, fd, td, wh, cc):
                           credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
     rows += [
-        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, fd, td, wh)),
-        R("NET COGS",            debit=formula_cogs, bold=True, row_type="net_cogs"),
+        R("Less: Closing Stock", credit=cl,          indent=1, link=_sb(co, td, td, wh)),
+        R("NET COGS  (Calculated — Trading Formula)", debit=formula_cogs, bold=True, row_type="net_cogs"),
         S(),
-        R("GROSS PROFIT",
+        R("GROSS PROFIT" if gross_profit >= 0 else "GROSS LOSS",
           debit =gross_profit if gross_profit <  0 else 0,
           credit=gross_profit if gross_profit >= 0 else 0,
           bold=True, row_type="gross_profit"),
         S(),
-    ]
-
-    # ── GL Reconciliation ─────────────────────────────────────────────────────
-    rows += [
-        H("GL RECONCILIATION"),
-        R("Perpetual GL COGS  (Dr on Cost of Goods Sold a/c)", debit=gl_cogs,       indent=1),
-        R("Formula COGS  (Opening + Purchases − Closing)",      debit=formula_cogs,  indent=1),
-        {**R("COGS Variance  ← must be zero",
-             debit =cogs_var if cogs_var >  0.005 else 0,
-             credit=abs(cogs_var) if cogs_var < -0.005 else 0,
-             bold=True, indent=1, row_type="variance",
-             link=_url("Item COGS Analysis Report", {"company": co, "from_date": fd, "to_date": td})),
-         "_is_variance": True, "_clean": abs(cogs_var) <= 0.005},
-        {**R("Bin vs Stock Account GL  ← must be zero",
-             debit =bin_gl_var if bin_gl_var >  0.005 else 0,
-             credit=abs(bin_gl_var) if bin_gl_var < -0.005 else 0,
-             bold=True, indent=1, row_type="variance",
-             link=_url("Stock Balance", {"company": co, "from_date": fd, "to_date": td})),
-         "_is_variance": True, "_clean": abs(bin_gl_var) <= 0.005},
     ]
 
     kv = {
@@ -600,7 +546,6 @@ def build_main(co, fd, td, wh, cc):
         "formula_cogs":     formula_cogs,
         "net_sales":        net_sales,
         "gross_profit":     gross_profit,
-        "gl_cogs":          gl_cogs,
         "gross_margin_pct": round(gross_profit / net_sales * 100, 1) if net_sales else 0.0,
         "currency":         currency,
     }
@@ -618,7 +563,7 @@ def build_warehouse_breakdown(co, fd, td, cc):
     for wh in warehouses:
         op   = opening_stock(co, fd, wh)
         cl   = closing_stock(co, td, wh)
-        loc, imp, lcv, pur_ret, _a, _b, _c, _d = purchase_split(co, fd, td, wh)
+        loc, imp, lcv, pur_ret = purchase_split(co, fd, td, wh)
         net_pur = loc + imp + lcv - pur_ret
         cogs    = flt(op + net_pur - cl, 3)
 
