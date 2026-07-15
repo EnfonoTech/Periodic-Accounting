@@ -53,11 +53,13 @@ def get_columns():
     ]
 
 
-def _txn_type(company_cur, currency, is_return, update_stock):
-    """Return a human-readable label for the formula bucket this line feeds."""
+def _txn_type(company_cur, currency, is_return, update_stock, epromise_vr=None):
+    """Return a human-readable label for the formula bucket this line feeds.
+    Import = foreign currency OR a migrated import voucher (epromise_vr IP…)."""
     cur       = currency or company_cur
+    is_import = (cur != company_cur) or bool(epromise_vr and str(epromise_vr).startswith("IP"))
     direction = "Return" if is_return else "Purchase"
-    locality  = "Local" if cur == company_cur else "Import"
+    locality  = "Import" if is_import else "Local"
     upd       = "" if update_stock else "  (no stock update)"
     return f"{locality} {direction}{upd}"
 
@@ -71,6 +73,8 @@ def get_data(filters):
     ctype = filters.get("currency_type") or "All"
 
     company_cur = frappe.db.get_value("Company", co, "default_currency") or ""
+    has_epr = frappe.db.has_column("Purchase Invoice", "epromise_vr")
+    epr_sel = "pi.epromise_vr" if has_epr else "NULL"
 
     # ── WHERE clauses ─────────────────────────────────────────────────────────
     conditions = [
@@ -91,10 +95,16 @@ def get_data(filters):
         conditions.append("pi.is_return = 1")
 
     if ctype == "Local":
-        conditions.append("COALESCE(pi.currency, %s) = %s")
+        loc = "COALESCE(pi.currency, %s) = %s"
+        if has_epr:
+            loc += " AND (pi.epromise_vr IS NULL OR pi.epromise_vr NOT LIKE 'IP%%')"
+        conditions.append(f"({loc})")
         params += [company_cur, company_cur]
     elif ctype == "Import":
-        conditions.append("COALESCE(pi.currency, %s) != %s")
+        imp = "COALESCE(pi.currency, %s) != %s"
+        if has_epr:
+            imp += " OR pi.epromise_vr LIKE 'IP%%'"
+        conditions.append(f"({imp})")
         params += [company_cur, company_cur]
 
     where = " AND ".join(conditions)
@@ -105,6 +115,7 @@ def get_data(filters):
             pi.name         AS purchase_invoice,
             pi.supplier,
             pi.currency,
+            {epr_sel} AS epromise_vr,
             pi.update_stock,
             pi.is_return,
             pii.item_code,
@@ -127,7 +138,7 @@ def get_data(filters):
 
     # ── Attach type label to each row ─────────────────────────────────────────
     for r in raw:
-        r["txn_type"] = _txn_type(company_cur, r.currency, r.is_return, r.update_stock)
+        r["txn_type"] = _txn_type(company_cur, r.currency, r.is_return, r.update_stock, r.get("epromise_vr"))
 
     # ── Group by PI with subtotals ────────────────────────────────────────────
     result      = []

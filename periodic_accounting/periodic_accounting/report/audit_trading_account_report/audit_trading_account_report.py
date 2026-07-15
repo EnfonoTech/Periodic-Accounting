@@ -23,6 +23,11 @@ def execute(filters=None):
 
     fd = str(fd); td = str(td)
     wh = filters.get("warehouse")
+    # A group warehouse (e.g. "All Warehouses") holds no direct SLE/Bin rows — those
+    # live on its leaf children. Treat a group selection as company-wide so totals
+    # match the Stock Balance report instead of returning 0.
+    if wh and frappe.db.get_value("Warehouse", wh, "is_group"):
+        wh = None
     cc = filters.get("cost_center")
 
     rows, kv = build_main(co, fd, td, wh, cc)
@@ -85,12 +90,16 @@ def _pi_list(co, fd, td, company_cur, kind):
         "posting_date": json.dumps(["between", [fd, td]]),
         "docstatus": 1,
     }
+    has_epr = frappe.db.has_column("Purchase Invoice", "epromise_vr")
     if kind == "local":
         p["currency"] = company_cur
         p["is_return"] = 0
     elif kind == "import":
-        p["currency"] = json.dumps(["!=", company_cur])
         p["is_return"] = 0
+        if has_epr:                                  # migrated imports are BHD-posted, tagged IP
+            p["epromise_vr"] = json.dumps(["like", "IP%"])
+        else:
+            p["currency"] = json.dumps(["!=", company_cur])
     elif kind == "return":
         p["is_return"] = 1
     return f"/app/purchase-invoice?{urlencode(p)}"
@@ -166,11 +175,11 @@ def closing_stock(co, td, wh=None):
     if getdate(td) >= getdate(today()):
         if wh:
             r = frappe.db.sql(
-                "SELECT COALESCE(SUM(actual_qty*valuation_rate),0) AS v FROM `tabBin` WHERE warehouse=%s",
+                "SELECT COALESCE(SUM(stock_value),0) AS v FROM `tabBin` WHERE warehouse=%s",
                 wh, as_dict=True)
         else:
             r = frappe.db.sql("""
-                SELECT COALESCE(SUM(b.actual_qty*b.valuation_rate),0) AS v
+                SELECT COALESCE(SUM(b.stock_value),0) AS v
                 FROM `tabBin` b INNER JOIN `tabWarehouse` w ON w.name=b.warehouse
                 WHERE w.company=%s AND w.disabled=0
                   AND (w.warehouse_type IS NULL OR w.warehouse_type!='Transit')
@@ -216,10 +225,17 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
         else:
             vno_pi = "AND 1=0"
 
-    # ALL PI (with + without update_stock), stocked items, split by currency
+    # Import classification: foreign currency OR a migrated import voucher.
+    # Migration posts imports in company currency (BHD) so the currency test alone misses
+    # them; they are tagged epromise_vr='IP|<vr>'. Guard the column so other sites are unaffected.
+    ip_expr = ""
+    if frappe.db.has_column("Purchase Invoice", "epromise_vr"):
+        ip_expr = "OR pi.epromise_vr LIKE 'IP%%'"
+
+    # ALL PI (with + without update_stock), stocked items, split local vs import
     pi_rows = frappe.db.sql(f"""
         SELECT
-            COALESCE(pi.currency, %s)                                              AS cur,
+            CASE WHEN COALESCE(pi.currency, %s) <> %s {ip_expr} THEN 1 ELSE 0 END       AS is_imp,
             COALESCE(SUM(CASE WHEN pi.is_return=0 THEN pii.base_net_amount ELSE 0 END), 0) AS gross,
             COALESCE(ABS(SUM(CASE WHEN pi.is_return=1 THEN pii.base_net_amount ELSE 0 END)), 0) AS ret
         FROM `tabPurchase Invoice Item` pii
@@ -230,13 +246,12 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
           AND pi.docstatus = 1
           AND itm.is_stock_item = 1
           {wh_clause} {vno_pi}
-        GROUP BY pi.currency
-    """, [company_cur, co, fd, td] + wh_param + vp_pi, as_dict=True)
+        GROUP BY is_imp
+    """, [company_cur, company_cur, co, fd, td] + wh_param + vp_pi, as_dict=True)
 
     local_pur = import_pur = pur_ret = 0.0
     for row in pi_rows:
-        is_foreign = (row.cur or company_cur) != company_cur
-        if is_foreign:
+        if row.is_imp:
             import_pur += flt(row.gross)
         else:
             local_pur  += flt(row.gross)
@@ -246,29 +261,16 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     # ERPNext updates the source PI's SLE valuation directly on LCV submit
     # rather than creating separate SLE with voucher_type='Landed Cost Voucher'.
     # Querying LCV.taxes gives the correct charged amount.
-    if wh:
-        # Only LCVs that cover items in the specified warehouse
-        lcv_r = frappe.db.sql("""
-            SELECT COALESCE(SUM(lcvt.amount), 0) AS v
-            FROM `tabLanded Cost Voucher` lcv
-            INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
-            WHERE lcv.company = %s
-              AND lcv.posting_date BETWEEN %s AND %s
-              AND lcv.docstatus = 1
-              AND EXISTS (
-                  SELECT 1 FROM `tabLanded Cost Item` lci
-                  WHERE lci.parent = lcv.name AND lci.warehouse = %s
-              )
-        """, [co, fd, td, wh], as_dict=True)
-    else:
-        lcv_r = frappe.db.sql("""
-            SELECT COALESCE(SUM(lcvt.amount), 0) AS v
-            FROM `tabLanded Cost Voucher` lcv
-            INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
-            WHERE lcv.company = %s
-              AND lcv.posting_date BETWEEN %s AND %s
-              AND lcv.docstatus = 1
-        """, [co, fd, td], as_dict=True)
+    # LCV charges cannot be scoped by warehouse (Landed Cost Item has no warehouse
+    # field), so use the period total for the company.
+    lcv_r = frappe.db.sql("""
+        SELECT COALESCE(SUM(lcvt.amount), 0) AS v
+        FROM `tabLanded Cost Voucher` lcv
+        INNER JOIN `tabLanded Cost Taxes and Charges` lcvt ON lcvt.parent = lcv.name
+        WHERE lcv.company = %s
+          AND lcv.posting_date BETWEEN %s AND %s
+          AND lcv.docstatus = 1
+    """, [co, fd, td], as_dict=True)
     lcv = flt(lcv_r[0].v) if lcv_r else 0.0
 
     return local_pur, import_pur, lcv, pur_ret
@@ -409,13 +411,13 @@ def ig_figures(co, fd, td, wh, ig):
     if getdate(td) >= getdate(today()):
         if wh:
             r = frappe.db.sql("""
-                SELECT COALESCE(SUM(b.actual_qty*b.valuation_rate),0) AS v
+                SELECT COALESCE(SUM(b.stock_value),0) AS v
                 FROM `tabBin` b INNER JOIN `tabItem` itm ON itm.name=b.item_code
                 WHERE b.warehouse=%s AND itm.item_group=%s
             """, [wh, ig], as_dict=True)
         else:
             r = frappe.db.sql("""
-                SELECT COALESCE(SUM(b.actual_qty*b.valuation_rate),0) AS v
+                SELECT COALESCE(SUM(b.stock_value),0) AS v
                 FROM `tabBin` b INNER JOIN `tabWarehouse` w ON w.name=b.warehouse
                 INNER JOIN `tabItem` itm ON itm.name=b.item_code
                 WHERE w.company=%s AND w.disabled=0
