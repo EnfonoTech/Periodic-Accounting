@@ -167,9 +167,9 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     # 'IP…', so the currency test alone misclassifies them as local. Treat them as import.
     ip_parts = []
     if frappe.db.has_column("Purchase Invoice", "epromise_vr"):
-        ip_parts.append("pi.epromise_vr LIKE 'IP%%'")
+        ip_parts.append("COALESCE(pi.epromise_vr,'') LIKE 'IP%%'")
     if frappe.db.has_column("Purchase Receipt", "epromise_vr"):
-        ip_parts.append("pr.epromise_vr LIKE 'IP%%'")
+        ip_parts.append("COALESCE(pr.epromise_vr,'') LIKE 'IP%%'")
     ip_expr = (" OR " + " OR ".join(ip_parts)) if ip_parts else ""
 
     where = " AND ".join(c + [

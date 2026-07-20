@@ -54,9 +54,9 @@ def get_data(filters):
     # imports (epromise_vr 'IP…') which post in company currency but are imports.
     ip_parts = []
     if frappe.db.has_column("Purchase Invoice", "epromise_vr"):
-        ip_parts.append("pi.epromise_vr LIKE 'IP%%'")
+        ip_parts.append("COALESCE(pi.epromise_vr,'') LIKE 'IP%%'")
     if frappe.db.has_column("Purchase Receipt", "epromise_vr"):
-        ip_parts.append("pr.epromise_vr LIKE 'IP%%'")
+        ip_parts.append("COALESCE(pr.epromise_vr,'') LIKE 'IP%%'")
     ip_or      = (" OR " + " OR ".join(ip_parts)) if ip_parts else ""
     ip_and_not = (" AND NOT (" + " OR ".join(ip_parts) + ")") if ip_parts else ""
 
