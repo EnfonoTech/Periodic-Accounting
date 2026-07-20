@@ -336,6 +336,22 @@ def gl_cogs_total(co, fd, td, cc=None):
     return flt(r[0].v) if r else 0.0
 
 
+def gl_cogs_by_voucher_type(co, fd, td, cc=None):
+    """NET COGS composition — net movement on Cost-of-Goods-Sold accounts grouped by
+    voucher type (Sales Invoice / Delivery Note / Purchase Receipt / Journal …). These
+    sum exactly to NET COGS = the Trial-Balance COGS account."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
+    if cc: p["cost_center"] = cc
+    query = ("SELECT gle.voucher_type AS vt, COALESCE(SUM(gle.debit-gle.credit),0) AS v "
+             "FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account "
+             "WHERE gle.company=%(company)s AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s "
+             "AND gle.is_cancelled=0 "
+             "AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold'" + cc_cond +
+             " GROUP BY gle.voucher_type ORDER BY v DESC")
+    return [(r.vt, flt(r.v)) for r in frappe.db.sql(query, p, as_dict=True) if flt(r.v)]
+
+
 def get_cc_vouchers(co, cc):
     rows = frappe.db.sql(
         "SELECT DISTINCT voucher_no FROM `tabGL Entry` WHERE company=%s AND cost_center=%s AND is_cancelled=0",
@@ -461,6 +477,7 @@ def build_main(co, fd, td, wh, cc):
     gl_cogs      = gl_cogs_total(co, fd, td, cc)         # Trial-Balance COGS (the anchor)
     cogs_accts   = frappe.db.sql_list(
         "SELECT name FROM `tabAccount` WHERE company=%s AND account_type='Cost of Goods Sold'", co)
+    cogs_vt      = gl_cogs_by_voucher_type(co, fd, td, cc)   # NET COGS composition by voucher type
     # Single balancing line to the Trial Balance. It absorbs every stock movement that is
     # not a purchase or a sale — Stock Entry / Reconciliation, opening-load, inter-warehouse
     # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
@@ -531,11 +548,15 @@ def build_main(co, fd, td, wh, cc):
         rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)",
                          adj_val, 2))
 
+    rows.append(R("NET COGS  (Trial Balance)",
+                  debit =net_cogs if net_cogs >= 0 else 0,
+                  credit=abs(net_cogs) if net_cogs <  0 else 0,
+                  bold=True, row_type="net_cogs", link=_gl_cogs(co, fd, td, cogs_accts, cc)))
+    # Split of NET COGS by the voucher type that posted to the COGS account (sums to NET COGS).
+    for vt, val in cogs_vt:
+        rows.append(_sgn("via " + vt, val, 2, link=_gl_cogs(co, fd, td, cogs_accts, cc)))
+
     rows += [
-        R("NET COGS  (Trial Balance)",
-          debit =net_cogs if net_cogs >= 0 else 0,
-          credit=abs(net_cogs) if net_cogs <  0 else 0,
-          bold=True, row_type="net_cogs", link=_gl_cogs(co, fd, td, cogs_accts, cc)),
         R("NET COGS ties to Trial Balance COGS",
           bold=False, row_type="variance"),
         S(),
