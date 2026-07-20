@@ -1,44 +1,48 @@
 frappe.query_reports["Realtime Trading Account Report"] = {
-	filters: [
+	"filters": [
 		{
 			fieldname: "company",
 			label: __("Company"),
 			fieldtype: "Link",
 			options: "Company",
 			reqd: 1,
-			default: frappe.defaults.get_user_default("Company")
+			default: frappe.defaults.get_user_default("Company"),
 		},
 		{
 			fieldname: "from_date",
 			label: __("From Date"),
 			fieldtype: "Date",
 			reqd: 1,
-			default: frappe.datetime.month_start()
+			default: frappe.datetime.month_start(),
 		},
 		{
 			fieldname: "to_date",
 			label: __("To Date"),
 			fieldtype: "Date",
 			reqd: 1,
-			default: frappe.datetime.get_today()
+			default: frappe.datetime.get_today(),
 		},
 		{
 			fieldname: "warehouse",
 			label: __("Warehouse"),
 			fieldtype: "Link",
 			options: "Warehouse",
-			description: __("Filter by a specific warehouse. Overrides Cost Center warehouse filter.")
+			get_query: function () {
+				return { filters: { company: frappe.query_report.get_filter_value("company") } };
+			},
 		},
 		{
 			fieldname: "cost_center",
 			label: __("Cost Center"),
 			fieldtype: "Link",
 			options: "Cost Center",
-			description: __("Filters SLE by warehouses linked to this cost centre.")
-		}
+			get_query: function () {
+				return { filters: { company: frappe.query_report.get_filter_value("company") } };
+			},
+		},
 	],
 
-	onload: function(report) {
+	onload: function (report) {
 		function get_nav_params() {
 			return {
 				company:     report.get_filter_value("company"),
@@ -49,68 +53,94 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 			};
 		}
 		const grp = __("Financial Statements");
-		report.page.add_inner_button(__("Gross & Net Profit"), function() {
+		report.page.add_inner_button(__("Gross & Net Profit"), function () {
 			frappe.set_route("query-report", "Periodic Gross and Net Profit", get_nav_params());
 		}, grp);
-		report.page.add_inner_button(__("Balance Sheet"), function() {
+		report.page.add_inner_button(__("Balance Sheet"), function () {
 			frappe.set_route("query-report", "Periodic Balance Sheet", get_nav_params());
 		}, grp);
-		report.page.add_inner_button(__("Cash Flow"), function() {
+		report.page.add_inner_button(__("Cash Flow"), function () {
 			frappe.set_route("query-report", "Standard Cash Flow Report", get_nav_params());
 		}, grp);
 	},
 
-	formatter: function(value, row, column, data, default_formatter) {
-		if (!data) return default_formatter(value, row, column, data);
+	"formatter": function (value, row, column, data, default_formatter) {
+		value = default_formatter(value, row, column, data);
+		if (!data) return value;
 
-		// Dr / Cr amount columns
-		if (column.fieldname === "debit" || column.fieldname === "credit") {
-			value = default_formatter(value, row, column, data);
-			const isTotal = data.particulars && data.particulars.startsWith("TOTAL");
-			if (isTotal) return `<strong style="color:var(--blue-600);">${value}</strong>`;
-			return data.bold ? `<strong>${value}</strong>` : value;
+		const fn = column.fieldname;
+		const rt = data._row_type || "detail";
+
+		// ── Primary section headers (SALES / COST OF GOODS SOLD) ─────────────
+		if (rt === "section") {
+			if (fn === "particulars") {
+				return `<strong style="color:#1a237e;font-size:12px;letter-spacing:.04em">${value}</strong>`;
+			}
+			return "";
 		}
 
-		// Particulars column
-		if (column.fieldname === "particulars") {
-			if (!value) return "";
-			const pad   = (data.indent || 0) * 20;
-			const style = `display:inline-block; padding-left:${pad}px;`;
-
-			// Separator line row
-			if (value.startsWith("─")) {
-				return `<span style="color:var(--border-color); letter-spacing:-1px;">${value}</span>`;
+		// ── Secondary section headers (Breakdown by…) ────────────────────────
+		if (rt === "recon_header") {
+			if (fn === "particulars") {
+				const clean = (data.particulars || "").replace(/^── /, "").replace(/ ─+$/, "");
+				return `<strong style="color:#455a64">${clean}</strong>`;
 			}
+			return "";
+		}
 
-			// Margin analysis note row
-			if (value.startsWith("Gross Margin:")) {
-				return `<span style="color:var(--text-muted); font-size:0.9em; font-style:italic;">${value}</span>`;
-			}
+		// ── Warehouse / Item Group sub-headers ───────────────────────────────
+		if (rt === "wh_header" && fn === "particulars") {
+			return `<span style="color:#1565c0;font-weight:700">▸ ${value}</span>`;
+		}
 
-			// Balance verification row
-			if (value.startsWith("TOTAL")) {
-				return `<strong style="${style} color:var(--blue-600);">${value}</strong>`;
-			}
+		// ── NET SALES ────────────────────────────────────────────────────────
+		if (rt === "net_sales") {
+			return `<strong style="color:#00695c">${value}</strong>`;
+		}
 
-			if (data.bold) {
-				if (data.link) {
-					return `<a href="${data.link}" target="_blank"
-					           style="${style} font-weight:bold; letter-spacing:0.04em;
-					                  color:var(--text-color); text-decoration:underline;
-					                  text-underline-offset:3px; text-decoration-style:dotted;"
-					           title="Click to view detail">${value}</a>`;
+		// ── NET COGS ─────────────────────────────────────────────────────────
+		if (rt === "net_cogs") {
+			return `<strong style="color:#bf360c">${value}</strong>`;
+		}
+
+		// ── GROSS PROFIT ─────────────────────────────────────────────────────
+		if (rt === "gross_profit") {
+			const profit = (parseFloat(data.credit) || 0) > 0.005;
+			const color  = profit ? "#1b5e20" : "#b71c1c";
+			return `<strong style="color:${color};font-size:13px">${value}</strong>`;
+		}
+
+		// ── Variance row (Formula COGS vs GL COGS — the truthful-mirror check) ─
+		if (rt === "variance") {
+			const dr    = parseFloat(data.debit)  || 0;
+			const cr    = parseFloat(data.credit) || 0;
+			const dirty = (dr + cr) > 0.005;
+
+			if (fn === "particulars") {
+				const icon  = dirty ? "❌" : "✅";
+				const color = dirty ? "#b71c1c" : "#2e7d32";
+				const label = `${icon} <span style="color:${color};font-weight:600">${value}</span>`;
+				if (dirty && data.link) {
+					return `<a href="${data.link}" title="Click to investigate"
+					           style="text-decoration:none">${label}</a>`;
 				}
-				return `<strong style="${style} letter-spacing:0.04em;">${value}</strong>`;
+				return label;
 			}
-			if (data.link) {
-				return `<a href="${data.link}" target="_blank"
-				           style="${style} color:var(--text-color); text-decoration:underline;
-				                  text-underline-offset:3px; text-decoration-style:dotted;"
-				           title="Click to view detail">${value}</a>`;
+			if (fn === "debit" || fn === "credit") {
+				if (!dirty) return `<span style="color:#2e7d32;font-weight:600">${value}</span>`;
+				return `<strong style="color:#b71c1c">${value}</strong>`;
 			}
-			return `<span style="${style}">${value}</span>`;
 		}
 
-		return default_formatter(value, row, column, data);
-	}
+		// ── Empty divider rows ────────────────────────────────────────────────
+		if (rt === "divider") return "";
+
+		// ── Clickable particulars (any detail row with a link) ─────────────────
+		if (fn === "particulars" && data.link) {
+			return `<a href="${data.link}" title="Click to view detail"
+			           style="color:inherit;text-decoration:underline dotted">${value}</a>`;
+		}
+
+		return value;
+	},
 };
