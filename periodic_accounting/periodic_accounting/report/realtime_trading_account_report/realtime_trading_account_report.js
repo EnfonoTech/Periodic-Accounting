@@ -95,7 +95,12 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 
 		// ── NET SALES ────────────────────────────────────────────────────────
 		if (rt === "net_sales") {
-			return `<strong style="color:#00695c">${value}</strong>`;
+			const inner = `<strong style="color:#00695c">${value}</strong>`;
+			if (fn === "particulars" && data.link) {
+				return `<a href="${data.link}" title="Click to view sales revenue entries"
+				           style="text-decoration:underline dotted; text-underline-offset:3px;">${inner}</a>`;
+			}
+			return inner;
 		}
 
 		// ── NET COGS ─────────────────────────────────────────────────────────

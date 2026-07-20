@@ -97,6 +97,22 @@ def _sse(co, fd, td, wh=None):
     if wh: p["warehouse"] = wh
     return _url("Sales Stock Entries", p)
 
+def _rse(co, fd, td, wh=None, mtype=None):
+    """Reconciliation Stock Entries drill — the non-purchase / non-COGS-sale stock
+    movements behind the Reconciliation to Trial Balance line."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if wh: p["warehouse"] = wh
+    if mtype: p["movement_type"] = mtype
+    return _url("Reconciliation Stock Entries", p)
+
+def _sre(co, fd, td, cc=None, stype=None):
+    """Sales Revenue Entries drill — GL income (Sales Invoice + Delivery Note) behind
+    the SALES head."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if cc: p["cost_center"] = cc
+    if stype: p["sales_type"] = stype
+    return _url("Sales Revenue Entries", p)
+
 
 # ── SLE aggregation ───────────────────────────────────────────────────────────
 
@@ -445,9 +461,9 @@ def build_main(co, fd, td, wh, cc):
 
     rows = [
         R("SALES", bold=True, row_type="section"),
-        R("Gross Sales Revenue",          credit=g_sales,   indent=1, link=_sr(co, fd, td)),
-        R("Less: Returns / Credit Notes", debit=sal_ret,    indent=1, link=_sr(co, fd, td)),
-        R("NET SALES",                    credit=net_sales, bold=True, row_type="net_sales"),
+        R("Gross Sales Revenue",          credit=g_sales,   indent=1, link=_sre(co, fd, td, cc, stype="Sales")),
+        R("Less: Returns / Credit Notes", debit=sal_ret,    indent=1, link=_sre(co, fd, td, cc, stype="Returns")),
+        R("NET SALES",                    credit=net_sales, bold=True, row_type="net_sales", link=_sre(co, fd, td, cc)),
         S(),
 
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
@@ -487,13 +503,14 @@ def build_main(co, fd, td, wh, cc):
     ]
 
     # ── Reconciliation to Trial Balance — shown with its accurate 3-way split ────
-    rows.append(_sgn("Reconciliation to Trial Balance", recon_tb, 1, bold=True, rt="subtotal"))
+    rows.append(_sgn("Reconciliation to Trial Balance", recon_tb, 1, bold=True, rt="subtotal",
+                     link=_rse(co, fd, td, wh)))
     if adj_se:
         rows.append(_sgn("Stock Entries & Reconciliations  (incl. opening-load)",
-                         adj_se, 2, link=_sl(co, fd, td, wh)))
+                         adj_se, 2, link=_rse(co, fd, td, wh, mtype="Stock Entries")))
     if adj_tr:
         rows.append(_sgn("In-transit / Transfer-out  (Delivery Note — not COGS)",
-                         adj_tr, 2, link=_sse(co, fd, td, wh)))
+                         adj_tr, 2, link=_rse(co, fd, td, wh, mtype="Transfers")))
     if adj_val:
         rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)",
                          adj_val, 2))
