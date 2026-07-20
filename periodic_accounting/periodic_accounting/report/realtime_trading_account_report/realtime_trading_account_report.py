@@ -545,16 +545,24 @@ def build_main(co, fd, td, wh, cc):
         rows.append(_sgn("In-transit / Transfer-out  (Delivery Note — not COGS)",
                          adj_tr, 2, link=_rse(co, fd, td, wh, mtype="Transfers")))
     if adj_val:
-        rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)",
-                         adj_val, 2))
+        rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)", adj_val, 2))
+        # Split: (a) COGS-account postings NOT from a sale (Purchase Receipt valuation
+        # legs, Journals, etc. — no stock-out counterpart); (b) the residual per-voucher
+        # SLE↔GL valuation drift on the sales that did post COGS. (a)+(b) == adj_val.
+        sales_cogs_gl = sum(v for vt, v in cogs_vt if vt in ("Sales Invoice", "Delivery Note"))
+        nonsales_cogs = flt(gl_cogs - sales_cogs_gl, 3)
+        sales_drift   = flt(adj_val - nonsales_cogs, 3)
+        if nonsales_cogs:
+            rows.append(_sgn("Non-sales COGS postings  (Purchase Receipt / Journal / adj.)",
+                             nonsales_cogs, 3, link=_gl_cogs(co, fd, td, cogs_accts, cc)))
+        if sales_drift:
+            rows.append(_sgn("Sales valuation drift  (SI/DN: GL COGS vs stock value out)",
+                             sales_drift, 3))
 
     rows.append(R("NET COGS  (Trial Balance)",
                   debit =net_cogs if net_cogs >= 0 else 0,
                   credit=abs(net_cogs) if net_cogs <  0 else 0,
                   bold=True, row_type="net_cogs", link=_gl_cogs(co, fd, td, cogs_accts, cc)))
-    # Split of NET COGS by the voucher type that posted to the COGS account (sums to NET COGS).
-    for vt, val in cogs_vt:
-        rows.append(_sgn("via " + vt, val, 2, link=_gl_cogs(co, fd, td, cogs_accts, cc)))
 
     rows += [
         R("NET COGS ties to Trial Balance COGS",
