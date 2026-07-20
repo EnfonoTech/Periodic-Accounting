@@ -113,6 +113,15 @@ def _sre(co, fd, td, cc=None, stype=None):
     if stype: p["sales_type"] = stype
     return _url("Sales Revenue Entries", p)
 
+def _gl_cogs(co, fd, td, accounts, cc=None):
+    """General Ledger drill on the COGS account(s) — the exact Trial-Balance breakdown
+    (every voucher posting to Cost of Goods Sold) that NET COGS equals."""
+    p = {"company": co, "from_date": fd, "to_date": td, "group_by": "Group by Voucher (Consolidated)"}
+    if accounts:
+        p["account"] = json.dumps(accounts)
+    if cc: p["cost_center"] = cc
+    return _url("General Ledger", p)
+
 
 # ── SLE aggregation ───────────────────────────────────────────────────────────
 
@@ -309,14 +318,19 @@ def sales_data(co, fd, td, cc=None):
 
 
 def gl_cogs_total(co, fd, td, cc=None):
-    """Trial-Balance COGS: movement on Cost-of-Goods-Sold accounts from sales."""
+    """Trial-Balance COGS: the FULL period movement on Cost-of-Goods-Sold accounts,
+    ALL voucher types — Sales Invoice, Delivery Note, plus any Purchase Receipt /
+    Journal Entry / Stock adjustment that posts to a COGS account. This is exactly the
+    Trial Balance COGS-account net (Debit − Credit), so NET COGS mirrors it precisely.
+    (The earlier Sales-Invoice/Delivery-Note-only filter dropped non-sales COGS
+    postings — e.g. a Purchase Receipt rate/valuation leg booked to COGS.)"""
     p = {"company": co, "from_date": fd, "to_date": td}
     cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
     if cc: p["cost_center"] = cc
     query = ("SELECT COALESCE(SUM(gle.debit-gle.credit),0) AS v "
              "FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account "
              "WHERE gle.company=%(company)s AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s "
-             "AND gle.voucher_type IN ('Sales Invoice','Delivery Note') AND gle.is_cancelled=0 "
+             "AND gle.is_cancelled=0 "
              "AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold'" + cc_cond)
     r = frappe.db.sql(query, p, as_dict=True)
     return flt(r[0].v) if r else 0.0
@@ -445,6 +459,8 @@ def build_main(co, fd, td, wh, cc):
     stock_cogs   = goods_avail - cl                      # plain trading formula: Opening + Purchases − Closing
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gl_cogs      = gl_cogs_total(co, fd, td, cc)         # Trial-Balance COGS (the anchor)
+    cogs_accts   = frappe.db.sql_list(
+        "SELECT name FROM `tabAccount` WHERE company=%s AND account_type='Cost of Goods Sold'", co)
     # Single balancing line to the Trial Balance. It absorbs every stock movement that is
     # not a purchase or a sale — Stock Entry / Reconciliation, opening-load, inter-warehouse
     # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
@@ -519,7 +535,7 @@ def build_main(co, fd, td, wh, cc):
         R("NET COGS  (Trial Balance)",
           debit =net_cogs if net_cogs >= 0 else 0,
           credit=abs(net_cogs) if net_cogs <  0 else 0,
-          bold=True, row_type="net_cogs", link=_sse(co, fd, td, wh)),
+          bold=True, row_type="net_cogs", link=_gl_cogs(co, fd, td, cogs_accts, cc)),
         R("NET COGS ties to Trial Balance COGS",
           bold=False, row_type="variance"),
         S(),
