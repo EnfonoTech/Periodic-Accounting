@@ -434,6 +434,10 @@ def build_main(co, fd, td, wh, cc):
     # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
     # drift (moving-average shifts / backdated reposts). So NET COGS = the GL / TB figure.
     recon_tb     = flt(gl_cogs - stock_cogs, 3)
+    # Accurate split of the reconciliation (adj_se + adj_tr + adj_val == recon_tb):
+    adj_se  = flt(other_adjustments(co, fd, td, wh, cc_vnos), 3)             # Stock Entry / Reconciliation (opening-load, adjustments)
+    adj_tr  = flt(non_cogs_sales_movement(co, fd, td, wh, cc, cc_vnos), 3)   # DN/SI stock out NOT booked to COGS (in-transit transfers)
+    adj_val = flt(recon_tb - adj_se - adj_tr, 3)                             # residual: per-voucher Stock-Ledger ↔ GL valuation differences
     net_cogs     = gl_cogs                               # NET COGS mirrors the Trial Balance
     gross_profit = net_sales - net_cogs
     opening_date = str(add_days(fd, -1))
@@ -470,16 +474,31 @@ def build_main(co, fd, td, wh, cc):
                   debit=net_pur, bold=True, indent=1, row_type="subtotal",
                   link=_pse(co, fd, td, wh)))
 
+    def _sgn(label, val, indent, link=None, bold=False, rt="detail"):
+        return R(label, debit=(val if val >= 0 else 0), credit=(abs(val) if val < 0 else 0),
+                 indent=indent, link=link, bold=bold, row_type=rt)
+
     rows += [
         R("Less: Closing Stock", credit=cl, indent=1, link=_sb(co, td, td, wh)),
         R("Stock-Movement COGS  (Opening + Purchases − Closing)",
           debit =stock_cogs if stock_cogs >= 0 else 0,
           credit=abs(stock_cogs) if stock_cogs <  0 else 0,
           bold=True, indent=1, row_type="subtotal", link=_sse(co, fd, td, wh)),
-        R("Reconciliation to Trial Balance  (transfers, adjustments & valuation)",
-          debit =recon_tb if recon_tb >= 0 else 0,
-          credit=abs(recon_tb) if recon_tb < 0 else 0,
-          indent=1, row_type="detail", link=_sl(co, fd, td, wh)),
+    ]
+
+    # ── Reconciliation to Trial Balance — shown with its accurate 3-way split ────
+    rows.append(_sgn("Reconciliation to Trial Balance", recon_tb, 1, bold=True, rt="subtotal"))
+    if adj_se:
+        rows.append(_sgn("Stock Entries & Reconciliations  (incl. opening-load)",
+                         adj_se, 2, link=_sl(co, fd, td, wh)))
+    if adj_tr:
+        rows.append(_sgn("In-transit / Transfer-out  (Delivery Note — not COGS)",
+                         adj_tr, 2, link=_sse(co, fd, td, wh)))
+    if adj_val:
+        rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)",
+                         adj_val, 2))
+
+    rows += [
         R("NET COGS  (Trial Balance)",
           debit =net_cogs if net_cogs >= 0 else 0,
           credit=abs(net_cogs) if net_cogs <  0 else 0,
