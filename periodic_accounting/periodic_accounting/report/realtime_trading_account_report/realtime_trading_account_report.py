@@ -90,6 +90,13 @@ def _pse(co, fd, td, wh=None, ptype=None):
     if ptype: p["purchase_type"] = ptype
     return _url("Purchase Stock Entries", p)
 
+def _sse(co, fd, td, wh=None):
+    """Sales Stock Entries drill — outgoing stock from BOTH Sales Invoice and
+    Delivery Note (DN sales that ship stock without an invoice are included)."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if wh: p["warehouse"] = wh
+    return _url("Sales Stock Entries", p)
+
 
 # ── SLE aggregation ───────────────────────────────────────────────────────────
 
@@ -468,7 +475,7 @@ def build_main(co, fd, td, wh, cc):
         R("Stock-Movement COGS  (Opening + Purchases − Closing)",
           debit =stock_cogs if stock_cogs >= 0 else 0,
           credit=abs(stock_cogs) if stock_cogs <  0 else 0,
-          bold=True, indent=1, row_type="subtotal", link=_sl(co, fd, td, wh)),
+          bold=True, indent=1, row_type="subtotal", link=_sse(co, fd, td, wh)),
         R("Reconciliation to Trial Balance  (transfers, adjustments & valuation)",
           debit =recon_tb if recon_tb >= 0 else 0,
           credit=abs(recon_tb) if recon_tb < 0 else 0,
@@ -476,7 +483,7 @@ def build_main(co, fd, td, wh, cc):
         R("NET COGS  (Trial Balance)",
           debit =net_cogs if net_cogs >= 0 else 0,
           credit=abs(net_cogs) if net_cogs <  0 else 0,
-          bold=True, row_type="net_cogs"),
+          bold=True, row_type="net_cogs", link=_sse(co, fd, td, wh)),
         R("NET COGS ties to Trial Balance COGS",
           bold=False, row_type="variance"),
         S(),

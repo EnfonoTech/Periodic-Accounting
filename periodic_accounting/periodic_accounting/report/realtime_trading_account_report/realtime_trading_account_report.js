@@ -100,7 +100,12 @@ frappe.query_reports["Realtime Trading Account Report"] = {
 
 		// ── NET COGS ─────────────────────────────────────────────────────────
 		if (rt === "net_cogs") {
-			return `<strong style="color:#bf360c">${value}</strong>`;
+			const inner = `<strong style="color:#bf360c">${value}</strong>`;
+			if (fn === "particulars" && data.link) {
+				return `<a href="${data.link}" title="Click to view item outflow (Sales Invoice + Delivery Note)"
+				           style="text-decoration:underline dotted; text-underline-offset:3px;">${inner}</a>`;
+			}
+			return inner;
 		}
 
 		// ── GROSS PROFIT ─────────────────────────────────────────────────────
