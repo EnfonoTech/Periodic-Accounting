@@ -139,15 +139,16 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
     """
     Purchases from STOCK-INCREASING documents, valued at SLE stock_value_difference.
 
-    Source: Stock Ledger Entries whose voucher is a Purchase Receipt, Purchase
-    Invoice (update_stock creates the SLE naturally) or Landed Cost Voucher.
-      local_pur  — PR/PI, source currency == company currency, value change >= 0
-      import_pur — PR/PI, source currency != company currency, value change >= 0
-      lcv        — Landed Cost Voucher SLE (its own value change)
-      pur_ret    — PR/PI value change < 0 (returns), returned as a positive number
+    Source: Stock Ledger Entries whose voucher is a Purchase Receipt or Purchase
+    Invoice (update_stock creates the SLE naturally).
+      local_pur  — company currency (and not a migrated IP voucher), value change >= 0
+      import_pur — foreign currency OR a migrated import (epromise_vr 'IP…', posted in
+                   company currency), value change >= 0
+      pur_ret    — value change < 0 (returns), returned as a positive number
 
-    Sign-based (value change >= 0 / < 0) mirrors the Purchase Stock Entries drill
-    exactly, so each row's figure equals the total of its drill-down.
+    Landed Cost is not a separate line: ERPNext reposts it into the PR/PI valuation, so
+    it is already inside local/import (and hence in closing stock).
+    Sign-based (value change >= 0 / < 0) mirrors the Purchase Stock Entries drill.
     """
     company_cur = frappe.db.get_value("Company", co, "default_currency") or ""
     j, c, p = _wh_base(co, wh)
@@ -162,15 +163,23 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
         else:
             vno = "AND 1=0"
 
+    # Migrated (ePromise) imports are posted in company currency but tagged epromise_vr
+    # 'IP…', so the currency test alone misclassifies them as local. Treat them as import.
+    ip_parts = []
+    if frappe.db.has_column("Purchase Invoice", "epromise_vr"):
+        ip_parts.append("pi.epromise_vr LIKE 'IP%%'")
+    if frappe.db.has_column("Purchase Receipt", "epromise_vr"):
+        ip_parts.append("pr.epromise_vr LIKE 'IP%%'")
+    ip_expr = (" OR " + " OR ".join(ip_parts)) if ip_parts else ""
+
     where = " AND ".join(c + [
         "sle.posting_date BETWEEN %s AND %s",
-        "sle.voucher_type IN ('Purchase Receipt','Purchase Invoice','Landed Cost Voucher')",
+        "sle.voucher_type IN ('Purchase Receipt','Purchase Invoice')",
     ])
 
     query = (
         "SELECT "
-        "  sle.voucher_type AS vtype, "
-        "  CASE WHEN COALESCE(pr.currency, pi.currency, %s) <> %s THEN 1 ELSE 0 END AS is_imp, "
+        "  CASE WHEN COALESCE(pr.currency, pi.currency, %s) <> %s " + ip_expr + " THEN 1 ELSE 0 END AS is_imp, "
         "  COALESCE(SUM(CASE WHEN sle.stock_value_difference >= 0 "
         "                    THEN sle.stock_value_difference ELSE 0 END), 0) AS pos, "
         "  COALESCE(ABS(SUM(CASE WHEN sle.stock_value_difference < 0 "
@@ -179,21 +188,19 @@ def purchase_split(co, fd, td, wh=None, cc_vnos=None):
         "LEFT JOIN `tabPurchase Receipt`  pr ON sle.voucher_type='Purchase Receipt'  AND pr.name=sle.voucher_no "
         "LEFT JOIN `tabPurchase Invoice`  pi ON sle.voucher_type='Purchase Invoice'  AND pi.name=sle.voucher_no "
         "WHERE " + where + " " + vno + " "
-        "GROUP BY sle.voucher_type, is_imp"
+        "GROUP BY is_imp"
     )
     rows = frappe.db.sql(query, [company_cur, company_cur] + p + [fd, td] + vp, as_dict=True)
 
-    local_pur = import_pur = lcv = pur_ret = 0.0
+    local_pur = import_pur = pur_ret = 0.0
     for r in rows:
-        if r.vtype == "Landed Cost Voucher":
-            lcv += flt(r.pos) - flt(r.neg)
-            continue
         if r.is_imp:
             import_pur += flt(r.pos)
         else:
             local_pur  += flt(r.pos)
         pur_ret += flt(r.neg)
-    return local_pur, import_pur, lcv, pur_ret
+    # Landed Cost is embedded in the PR/PI valuation (ERPNext reposts it), so no separate line.
+    return local_pur, import_pur, pur_ret
 
 
 def other_adjustments(co, fd, td, wh=None, cc_vnos=None):
@@ -340,7 +347,7 @@ def ig_figures(co, fd, td, wh, ig):
                  "FROM `tabStock Ledger Entry` sle " + j + " " + itm_j + " "
                  "WHERE " + base_c + " AND itm.item_group=%s AND sle.is_cancelled=0 "
                  "AND sle.posting_date BETWEEN %s AND %s "
-                 "AND sle.voucher_type IN ('Purchase Receipt','Purchase Invoice','Landed Cost Voucher')")
+                 "AND sle.voucher_type IN ('Purchase Receipt','Purchase Invoice')")
     r_pur = frappe.db.sql(pur_query, p + [ig, fd, td], as_dict=True)
     net_pur_v = flt(r_pur[0].v) if r_pur else 0.0
 
@@ -408,9 +415,9 @@ def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
-    local_pur, import_pur, lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
+    local_pur, import_pur, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
 
-    net_pur      = local_pur + import_pur + lcv - pur_ret
+    net_pur      = local_pur + import_pur - pur_ret
     goods_avail  = op + net_pur
     stock_cogs   = goods_avail - cl                      # plain trading formula: Opening + Purchases − Closing
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
@@ -444,13 +451,9 @@ def build_main(co, fd, td, wh, cc):
                       debit=local_pur, indent=2,
                       link=_pse(co, fd, td, wh, ptype="Local")))
     if import_pur:
-        rows.append(R("Import Purchases  (PR/PI — foreign currency)",
+        rows.append(R("Import Purchases  (PR/PI — foreign currency or migrated IP)",
                       debit=import_pur, indent=2,
                       link=_pse(co, fd, td, wh, ptype="Import")))
-    if lcv:
-        rows.append(R("Landing Costs (LCV)",
-                      debit=lcv, indent=2,
-                      link=_pse(co, fd, td, wh, ptype="Landed Cost")))
     if pur_ret:
         rows.append(R("Less: Purchase Returns",
                       credit=pur_ret, indent=2,
@@ -512,9 +515,9 @@ def build_warehouse_breakdown(co, fd, td, cc):
     for wh in warehouses:
         op   = opening_stock(co, fd, wh)
         cl   = closing_stock(co, td, wh)
-        loc, imp, lcv, pur_ret = purchase_split(co, fd, td, wh)
+        loc, imp, pur_ret = purchase_split(co, fd, td, wh)
         adj  = other_adjustments(co, fd, td, wh) + non_cogs_sales_movement(co, fd, td, wh)
-        net_pur = loc + imp + lcv - pur_ret
+        net_pur = loc + imp - pur_ret
         cogs    = flt(op + net_pur + adj - cl, 3)
 
         if op == 0 and net_pur == 0 and cl == 0:

@@ -50,18 +50,26 @@ def get_data(filters):
     co_currency = frappe.db.get_value(
         "Company", filters.get("company"), "default_currency") or ""
 
-    # Same classification rule as report_utils.get_purchase_split — voucher
-    # currency vs company currency decides Local / Import.
+    # Local vs Import: voucher currency vs company currency, PLUS migrated ePromise
+    # imports (epromise_vr 'IP…') which post in company currency but are imports.
+    ip_parts = []
+    if frappe.db.has_column("Purchase Invoice", "epromise_vr"):
+        ip_parts.append("pi.epromise_vr LIKE 'IP%%'")
+    if frappe.db.has_column("Purchase Receipt", "epromise_vr"):
+        ip_parts.append("pr.epromise_vr LIKE 'IP%%'")
+    ip_or      = (" OR " + " OR ".join(ip_parts)) if ip_parts else ""
+    ip_and_not = (" AND NOT (" + " OR ".join(ip_parts) + ")") if ip_parts else ""
+
     ptype_clause, ptype_params = "", []
     ptype = filters.get("purchase_type")
     if ptype == "Local":
         ptype_clause = (" AND sle.voucher_type != 'Landed Cost Voucher'"
-                        " AND COALESCE(pr.currency, pi.currency, %s) = %s"
+                        " AND COALESCE(pr.currency, pi.currency, %s) = %s" + ip_and_not +
                         " AND sle.stock_value_difference >= 0")
         ptype_params = [co_currency, co_currency]
     elif ptype == "Import":
         ptype_clause = (" AND sle.voucher_type != 'Landed Cost Voucher'"
-                        " AND COALESCE(pr.currency, pi.currency, %s) != %s"
+                        " AND (COALESCE(pr.currency, pi.currency, %s) != %s" + ip_or + ")"
                         " AND sle.stock_value_difference >= 0")
         ptype_params = [co_currency, co_currency]
     elif ptype == "Landed Cost":
