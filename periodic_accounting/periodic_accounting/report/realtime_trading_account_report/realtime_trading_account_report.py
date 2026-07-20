@@ -408,23 +408,18 @@ def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
-    # Adjustments = non-purchase, non-sold stock movements: Stock Entry / Reconciliation
-    # (other_adjustments) PLUS Delivery-Note/Sales-Invoice legs that did not hit a COGS
-    # account (inter-warehouse transfers via in-transit). Together they make the trading
-    # formula tie exactly to the GL COGS.
-    adj     = (other_adjustments(co, fd, td, wh, cc_vnos)
-               + non_cogs_sales_movement(co, fd, td, wh, cc, cc_vnos))
     local_pur, import_pur, lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
 
     net_pur      = local_pur + import_pur + lcv - pur_ret
     goods_avail  = op + net_pur
-    stock_cogs   = goods_avail + adj - cl               # COGS implied by stock movements
+    stock_cogs   = goods_avail - cl                      # plain trading formula: Opening + Purchases − Closing
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gl_cogs      = gl_cogs_total(co, fd, td, cc)         # Trial-Balance COGS (the anchor)
-    # ERPNext books COGS per Sales Invoice / Delivery Note at a valuation that can differ
-    # slightly from the final Stock Ledger valuation (moving-average shifts, backdated
-    # reposts).  This unavoidable drift is shown explicitly so NET COGS = the GL figure.
-    val_adj      = flt(gl_cogs - stock_cogs, 3)
+    # Single balancing line to the Trial Balance. It absorbs every stock movement that is
+    # not a purchase or a sale — Stock Entry / Reconciliation, opening-load, inter-warehouse
+    # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
+    # drift (moving-average shifts / backdated reposts). So NET COGS = the GL / TB figure.
+    recon_tb     = flt(gl_cogs - stock_cogs, 3)
     net_cogs     = gl_cogs                               # NET COGS mirrors the Trial Balance
     gross_profit = net_sales - net_cogs
     opening_date = str(add_days(fd, -1))
@@ -465,23 +460,15 @@ def build_main(co, fd, td, wh, cc):
                   debit=net_pur, bold=True, indent=1, row_type="subtotal",
                   link=_pse(co, fd, td, wh)))
 
-    if adj:
-        if adj > 0:
-            rows.append(R("+ Stock Transfers & Adjustments  (non-sale movements)",
-                          debit=adj, indent=1, link=_sl(co, fd, td, wh)))
-        else:
-            rows.append(R("- Stock Transfers & Adjustments  (non-sale movements)",
-                          credit=abs(adj), indent=1, link=_sl(co, fd, td, wh)))
-
     rows += [
         R("Less: Closing Stock", credit=cl, indent=1, link=_sb(co, td, td, wh)),
-        R("Stock-Movement COGS  (Opening + Purchases ± Adj − Closing)",
+        R("Stock-Movement COGS  (Opening + Purchases − Closing)",
           debit =stock_cogs if stock_cogs >= 0 else 0,
           credit=abs(stock_cogs) if stock_cogs <  0 else 0,
           bold=True, indent=1, row_type="subtotal", link=_sl(co, fd, td, wh)),
-        R("Valuation Adjustment  (Stock Ledger ↔ GL)",
-          debit =val_adj if val_adj >= 0 else 0,
-          credit=abs(val_adj) if val_adj < 0 else 0,
+        R("Reconciliation to Trial Balance  (transfers, adjustments & valuation)",
+          debit =recon_tb if recon_tb >= 0 else 0,
+          credit=abs(recon_tb) if recon_tb < 0 else 0,
           indent=1, row_type="detail", link=_sl(co, fd, td, wh)),
         R("NET COGS  (Trial Balance)",
           debit =net_cogs if net_cogs >= 0 else 0,
@@ -503,7 +490,7 @@ def build_main(co, fd, td, wh, cc):
         "net_purchases":    net_pur,
         "closing":          cl,
         "stock_cogs":       stock_cogs,
-        "val_adj":          val_adj,
+        "recon_tb":         recon_tb,
         "formula_cogs":     net_cogs,   # chart/summary COGS = the Trial-Balance figure
         "gl_cogs":          gl_cogs,
         "net_sales":        net_sales,
@@ -597,14 +584,14 @@ def _make_chart(kv):
 def _make_summary(kv):
     ns   = kv.get("net_sales", 0)
     cogs = kv.get("formula_cogs", 0)   # = Trial-Balance COGS
-    adj  = kv.get("val_adj", 0)
+    rec  = kv.get("recon_tb", 0)
     gp   = kv.get("gross_profit", 0)
     pct  = kv.get("gross_margin_pct", 0)
     cur  = kv.get("currency", "")
     return [
         {"value": ns,   "label": "Net Sales",         "datatype": "Currency", "currency": cur, "indicator": "Blue"},
         {"value": cogs, "label": "COGS (Trial Bal.)", "datatype": "Currency", "currency": cur, "indicator": "Orange"},
-        {"value": adj,  "label": "Valuation Adj",     "datatype": "Currency", "currency": cur, "indicator": "Grey"},
+        {"value": rec,  "label": "Recon to TB",       "datatype": "Currency", "currency": cur, "indicator": "Grey"},
         {"value": gp,   "label": "Gross Profit",      "datatype": "Currency", "currency": cur,
          "indicator": "Green" if gp >= 0 else "Red"},
         {"value": pct,  "label": "Gross Margin %",    "datatype": "Percent",
