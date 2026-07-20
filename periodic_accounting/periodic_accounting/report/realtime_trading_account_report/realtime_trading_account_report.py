@@ -477,7 +477,6 @@ def build_main(co, fd, td, wh, cc):
     gl_cogs      = gl_cogs_total(co, fd, td, cc)         # Trial-Balance COGS (the anchor)
     cogs_accts   = frappe.db.sql_list(
         "SELECT name FROM `tabAccount` WHERE company=%s AND account_type='Cost of Goods Sold'", co)
-    cogs_vt      = gl_cogs_by_voucher_type(co, fd, td, cc)   # NET COGS composition by voucher type
     # Single balancing line to the Trial Balance. It absorbs every stock movement that is
     # not a purchase or a sale — Stock Entry / Reconciliation, opening-load, inter-warehouse
     # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
@@ -546,18 +545,6 @@ def build_main(co, fd, td, wh, cc):
                          adj_tr, 2, link=_rse(co, fd, td, wh, mtype="Transfers")))
     if adj_val:
         rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)", adj_val, 2))
-        # Split: (a) COGS-account postings NOT from a sale (Purchase Receipt valuation
-        # legs, Journals, etc. — no stock-out counterpart); (b) the residual per-voucher
-        # SLE↔GL valuation drift on the sales that did post COGS. (a)+(b) == adj_val.
-        sales_cogs_gl = sum(v for vt, v in cogs_vt if vt in ("Sales Invoice", "Delivery Note"))
-        nonsales_cogs = flt(gl_cogs - sales_cogs_gl, 3)
-        sales_drift   = flt(adj_val - nonsales_cogs, 3)
-        if nonsales_cogs:
-            rows.append(_sgn("Non-sales COGS postings  (Purchase Receipt / Journal / adj.)",
-                             nonsales_cogs, 3, link=_gl_cogs(co, fd, td, cogs_accts, cc)))
-        if sales_drift:
-            rows.append(_sgn("Sales valuation drift  (SI/DN: GL COGS vs stock value out)",
-                             sales_drift, 3))
 
     rows.append(R("NET COGS  (Trial Balance)",
                   debit =net_cogs if net_cogs >= 0 else 0,
