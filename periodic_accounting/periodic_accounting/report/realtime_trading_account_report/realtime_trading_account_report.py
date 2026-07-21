@@ -144,8 +144,9 @@ def _wh_base(company, warehouse):
         return "", ["sle.company=%s", "sle.warehouse=%s", "sle.is_cancelled=0"], [company, warehouse]
     return (
         "INNER JOIN `tabWarehouse` w ON w.name=sle.warehouse",
-        ["w.company=%s", "w.disabled=0",
-         "(w.warehouse_type IS NULL OR w.warehouse_type!='Transit')", "sle.is_cancelled=0"],
+        # include ALL warehouses (incl. disabled / In-Transit) so the report's stock scope
+        # matches the Trial Balance (which is account-based and counts every warehouse).
+        ["w.company=%s", "sle.is_cancelled=0"],
         [company],
     )
 
@@ -172,8 +173,7 @@ def closing_stock(co, td, wh=None):
             r = frappe.db.sql("""
                 SELECT COALESCE(SUM(b.stock_value),0) AS v
                 FROM `tabBin` b INNER JOIN `tabWarehouse` w ON w.name=b.warehouse
-                WHERE w.company=%s AND w.disabled=0
-                  AND (w.warehouse_type IS NULL OR w.warehouse_type!='Transit')
+                WHERE w.company=%s
             """, co, as_dict=True)
         return flt(r[0].v) if r else 0.0
     r = _sle(co, wh, ["sle.posting_date<=%s"], [td],
