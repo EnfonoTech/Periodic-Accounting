@@ -123,6 +123,20 @@ def _gl_cogs(co, fd, td, accounts, cc=None):
     return _url("General Ledger", p)
 
 
+def _cnp(co, fd, td, cc=None):
+    """COGS Non-Sales Postings drill — GL COGS entries whose voucher is NOT a sale."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if cc: p["cost_center"] = cc
+    return _url("COGS Non-Sales Postings", p)
+
+def _scd(co, fd, td, wh=None, cc=None):
+    """Sales COGS Valuation Drift drill — per SI/DN GL COGS vs Stock-Ledger value out."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    if wh: p["warehouse"] = wh
+    if cc: p["cost_center"] = cc
+    return _url("Sales COGS Valuation Drift", p)
+
+
 # ── SLE aggregation ───────────────────────────────────────────────────────────
 
 def _wh_base(company, warehouse):
@@ -303,6 +317,42 @@ def non_cogs_sales_movement(co, fd, td, wh=None, cc=None, cc_vnos=None):
     return flt(r[0].v) if r else 0.0
 
 
+def sales_cogs_stock_out(co, fd, td, wh=None, cc=None, cc_vnos=None):
+    """
+    Positive stock value that left via Delivery Note / Sales Invoice legs that DID post
+    to a Cost of Goods Sold account (= -Σ SLE stock_value_difference for those vouchers).
+    Computed the SAME way as the Sales COGS Valuation Drift drill so the report's
+    'Sales valuation drift' line ties to that drill's grand total exactly.
+    """
+    j, c, p = _wh_base(co, wh)
+    vno = ""; vp = []
+    if cc_vnos is not None:
+        if cc_vnos:
+            ph  = ",".join(["%s"] * len(cc_vnos))
+            vno = "AND sle.voucher_no IN (" + ph + ")"; vp = list(cc_vnos)
+        else:
+            vno = "AND 1=0"
+    cc_sub = ""; ccp = []
+    if cc:
+        cc_sub = "AND gle.cost_center=%s"; ccp = [cc]
+    where = " AND ".join(c + ["sle.posting_date BETWEEN %s AND %s",
+                              "sle.voucher_type IN ('Delivery Note','Sales Invoice')"])
+    query = (
+        "SELECT COALESCE(SUM(sle.stock_value_difference),0) AS v "
+        "FROM `tabStock Ledger Entry` sle " + j + " "
+        "WHERE " + where + " " + vno + " "
+        "AND sle.voucher_no IN ("
+        "  SELECT gle.voucher_no FROM `tabGL Entry` gle "
+        "  INNER JOIN `tabAccount` acc ON acc.name=gle.account "
+        "  WHERE gle.company=%s AND gle.posting_date BETWEEN %s AND %s "
+        "  AND gle.voucher_type IN ('Sales Invoice','Delivery Note') AND gle.is_cancelled=0 "
+        "  AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold' " + cc_sub +
+        ")"
+    )
+    r = frappe.db.sql(query, p + [fd, td] + vp + [co, fd, td] + ccp, as_dict=True)
+    return -flt(r[0].v) if r else 0.0
+
+
 def sales_data(co, fd, td, cc=None):
     p = {"company": co, "from_date": fd, "to_date": td}
     cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
@@ -477,6 +527,7 @@ def build_main(co, fd, td, wh, cc):
     gl_cogs      = gl_cogs_total(co, fd, td, cc)         # Trial-Balance COGS (the anchor)
     cogs_accts   = frappe.db.sql_list(
         "SELECT name FROM `tabAccount` WHERE company=%s AND account_type='Cost of Goods Sold'", co)
+    cogs_vt      = gl_cogs_by_voucher_type(co, fd, td, cc)   # NET COGS composition by voucher type
     # Single balancing line to the Trial Balance. It absorbs every stock movement that is
     # not a purchase or a sale — Stock Entry / Reconciliation, opening-load, inter-warehouse
     # transfers via in-transit — plus the intrinsic per-voucher Stock-Ledger↔GL valuation
@@ -545,6 +596,23 @@ def build_main(co, fd, td, wh, cc):
                          adj_tr, 2, link=_rse(co, fd, td, wh, mtype="Transfers")))
     if adj_val:
         rows.append(_sgn("Valuation & GL Differences  (Stock Ledger ↔ GL)", adj_val, 2))
+        # Enumerable split (a)+(b) == adj_val, each with its own drill:
+        #  (a) COGS-account postings NOT from a sale (Purchase Receipt valuation legs,
+        #      Journals, adjustments) — GL COGS from non-SI/DN vouchers.
+        #  (b) per-voucher SLE<->GL valuation drift on the sales that DID post COGS.
+        sales_cogs_gl   = sum(v for vt, v in cogs_vt if vt in ("Sales Invoice", "Delivery Note"))
+        nonsales_cogs   = flt(gl_cogs - sales_cogs_gl, 3)
+        sales_stock_out = sales_cogs_stock_out(co, fd, td, wh, cc, cc_vnos)
+        sales_drift     = flt(sales_cogs_gl - sales_stock_out, 3)   # == the drill's grand total
+        rounding        = flt(adj_val - nonsales_cogs - sales_drift, 3)   # 3-dp aggregation residual
+        if nonsales_cogs:
+            rows.append(_sgn("Non-sales COGS postings  (Purchase Receipt / Journal / adj.)",
+                             nonsales_cogs, 3, link=_cnp(co, fd, td, cc)))
+        if sales_drift:
+            rows.append(_sgn("Sales valuation drift  (SI/DN: GL COGS vs stock value out)",
+                             sales_drift, 3, link=_scd(co, fd, td, wh, cc)))
+        if rounding:
+            rows.append(_sgn("Rounding (3-dp aggregation)", rounding, 3))
 
     rows.append(R("NET COGS  (Trial Balance)",
                   debit =net_cogs if net_cogs >= 0 else 0,
