@@ -41,15 +41,23 @@ def get_data(filters):
     cc = filters.get("cost_center")
     cc_clause = " AND gle.cost_center=%s" if cc else ""
     cc_param = [cc] if cc else []
+    so = filters.get("stock_only")
+    sle_clause = ""; sle_param = []
+    if so in (1, "1", 0, "0"):
+        op = "IN" if str(so) == "1" else "NOT IN"
+        sle_clause = (" AND gle.voucher_no " + op + " (SELECT DISTINCT sle.voucher_no "
+                      "FROM `tabStock Ledger Entry` sle WHERE sle.company=%s "
+                      "AND sle.posting_date BETWEEN %s AND %s AND sle.is_cancelled=0) ")
+        sle_param = [co, fd, td]
     rows = frappe.db.sql(
         "SELECT gle.posting_date, gle.voucher_type, gle.voucher_no, gle.account, "
         "       gle.debit, gle.credit, (gle.debit-gle.credit) AS net "
         "FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account "
         "WHERE gle.company=%s AND gle.posting_date BETWEEN %s AND %s AND gle.is_cancelled=0 "
         "AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold' "
-        "AND gle.voucher_type NOT IN ('Sales Invoice','Delivery Note') " + cc_clause + " "
+        "AND gle.voucher_type NOT IN ('Sales Invoice','Delivery Note') " + cc_clause + sle_clause + " "
         "ORDER BY gle.voucher_type, gle.posting_date, gle.voucher_no",
-        [co, fd, td] + cc_param, as_dict=True)
+        [co, fd, td] + cc_param + sle_param, as_dict=True)
 
     groups = defaultdict(list)
     for r in rows:
