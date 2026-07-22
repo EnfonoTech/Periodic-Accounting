@@ -468,6 +468,45 @@ def H(label):
 
 # ── Main trading account section ──────────────────────────────────────────────
 
+def _tb_cogs_full(co, fd, td, cc=None):
+    """Full ledger (Trial Balance) COGS: net of ALL postings to COGS accounts, every voucher type."""
+    p = {"company": co, "from_date": fd, "to_date": td}
+    cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
+    if cc: p["cost_center"] = cc
+    r = frappe.db.sql("SELECT COALESCE(SUM(gle.debit-gle.credit),0) v "
+        "FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account "
+        "WHERE gle.company=%(company)s AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s "
+        "AND gle.is_cancelled=0 AND acc.root_type='Expense' AND acc.account_type='Cost of Goods Sold'" + cc_cond,
+        p, as_dict=True)
+    return flt(r[0].v) if r else 0.0
+
+
+def _sales_stock_out(co, fd, td, wh=None, cc=None):
+    """Positive stock value that left via SI/DN legs posting to COGS (= -sum SLE svd for those vouchers)."""
+    r = frappe.db.sql("SELECT COALESCE(SUM(sle.stock_value_difference),0) v FROM `tabStock Ledger Entry` sle "
+        "WHERE sle.company=%s AND sle.posting_date BETWEEN %s AND %s "
+        "AND sle.voucher_type IN ('Sales Invoice','Delivery Note') "
+        "AND sle.voucher_no IN (SELECT DISTINCT g.voucher_no FROM `tabGL Entry` g "
+        "  INNER JOIN `tabAccount` a ON a.name=g.account "
+        "  WHERE g.company=%s AND g.posting_date BETWEEN %s AND %s AND g.is_cancelled=0 "
+        "  AND g.voucher_type IN ('Sales Invoice','Delivery Note') AND a.account_type='Cost of Goods Sold')",
+        [co, fd, td, co, fd, td], as_dict=True)
+    return -flt(r[0].v) if r else 0.0
+
+
+def _srbnb_movement(co, fd, td):
+    """Net movement on Stock Received But Not Billed accounts (informational)."""
+    accts = frappe.db.get_all("Account", filters={"company": co,
+        "account_type": "Stock Received But Not Billed"}, pluck="name")
+    if not accts:
+        return 0.0
+    ph = ",".join(["%s"] * len(accts))
+    r = frappe.db.sql("SELECT COALESCE(SUM(debit-credit),0) v FROM `tabGL Entry` "
+        "WHERE company=%s AND account IN (" + ph + ") AND is_cancelled=0 "
+        "AND posting_date BETWEEN %s AND %s", [co] + accts + [fd, td], as_dict=True)
+    return flt(r[0].v) if r else 0.0
+
+
 def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
@@ -481,6 +520,13 @@ def build_main(co, fd, td, wh, cc):
     net_pur      = local_pur + import_pur - pur_ret
     goods_avail  = op + net_pur
     formula_cogs = goods_avail + recon - cl
+    # Reconcile periodic Trading Formula COGS to the ledger (Trial Balance) COGS.
+    tb_full_cogs = _tb_cogs_full(co, fd, td, cc)
+    _sales_gl    = gl_cogs_total(co, fd, td, cc)
+    nonsales     = flt(tb_full_cogs - _sales_gl, 3)
+    sales_drift  = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
+    other_adj    = flt((tb_full_cogs - formula_cogs) - nonsales - sales_drift, 3)
+    srbnb_mv     = _srbnb_movement(co, fd, td)
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
     opening_date = str(add_days(fd, -1))
@@ -517,6 +563,8 @@ def build_main(co, fd, td, wh, cc):
     rows.append(R("Net Purchases",
                   debit=net_pur, bold=True, indent=1, row_type="subtotal",
                   link=_pi_drill(co, fd, td, wh)))
+    if srbnb_mv:
+        rows.append(R("(memo) Received-not-Billed still in stock (SRBNB): %.3f %s - not a PI purchase; already in Closing" % (abs(srbnb_mv), currency), indent=2, row_type="memo"))
 
     if recon:
         if recon > 0:
@@ -531,6 +579,20 @@ def build_main(co, fd, td, wh, cc):
         R("NET COGS  (Calculated — Trading Formula)",
           debit =formula_cogs if formula_cogs >= 0 else 0,
           credit=abs(formula_cogs) if formula_cogs <  0 else 0,
+          bold=True, row_type="net_cogs"),
+        R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section"),
+        R("Less: Sales valuation drift (SLE vs GL on sales)",
+          debit=(sales_drift if sales_drift >= 0 else 0),
+          credit=(abs(sales_drift) if sales_drift < 0 else 0), indent=2),
+        R("Add: Non-stock / Non-sales COGS postings",
+          debit=(nonsales if nonsales >= 0 else 0),
+          credit=(abs(nonsales) if nonsales < 0 else 0), indent=2),
+        R("Other timing / rounding",
+          debit=(other_adj if other_adj >= 0 else 0),
+          credit=(abs(other_adj) if other_adj < 0 else 0), indent=2),
+        R("NET COGS  (Trial Balance)",
+          debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
+          credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
           bold=True, row_type="net_cogs"),
         S(),
         R("GROSS PROFIT" if gross_profit >= 0 else "GROSS LOSS",
