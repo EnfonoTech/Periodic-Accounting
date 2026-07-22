@@ -507,6 +507,14 @@ def _srbnb_movement(co, fd, td):
     return flt(r[0].v) if r else 0.0
 
 
+def _sle_svd_by_vt(co, fd, td):
+    """Sum of Stock Ledger stock_value_difference grouped by voucher_type over the period."""
+    rows = frappe.db.sql("SELECT voucher_type vt, COALESCE(SUM(stock_value_difference),0) v "
+        "FROM `tabStock Ledger Entry` WHERE company=%s AND posting_date BETWEEN %s AND %s "
+        "AND is_cancelled=0 GROUP BY voucher_type", [co, fd, td], as_dict=True)
+    return {r.vt: flt(r.v) for r in rows}
+
+
 def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
@@ -526,7 +534,11 @@ def build_main(co, fd, td, wh, cc):
     nonsales     = flt(tb_full_cogs - _sales_gl, 3)
     sales_drift  = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
     other_adj    = flt((tb_full_cogs - formula_cogs) - nonsales - sales_drift, 3)
-    srbnb_mv     = _srbnb_movement(co, fd, td)
+    _svd         = _sle_svd_by_vt(co, fd, td)
+    adj_srbnb    = flt((_svd.get("Purchase Receipt", 0.0) + _svd.get("Purchase Invoice", 0.0)) - net_pur, 3)
+    adj_se       = flt(_svd.get("Stock Entry", 0.0), 3)
+    adj_recon    = flt(_svd.get("Stock Reconciliation", 0.0) - recon, 3)
+    adj_round    = flt(other_adj - adj_srbnb - adj_se - adj_recon, 3)
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
     opening_date = str(add_days(fd, -1))
@@ -563,8 +575,6 @@ def build_main(co, fd, td, wh, cc):
     rows.append(R("Net Purchases",
                   debit=net_pur, bold=True, indent=1, row_type="subtotal",
                   link=_pi_drill(co, fd, td, wh)))
-    if srbnb_mv:
-        rows.append(R("(memo) Received-not-Billed still in stock (SRBNB): %.3f %s - not a PI purchase; already in Closing" % (abs(srbnb_mv), currency), indent=2, row_type="memo"))
 
     if recon:
         if recon > 0:
@@ -587,9 +597,18 @@ def build_main(co, fd, td, wh, cc):
         R("Add: Non-stock / Non-sales COGS postings",
           debit=(nonsales if nonsales >= 0 else 0),
           credit=(abs(nonsales) if nonsales < 0 else 0), indent=2),
-        R("Other timing / rounding",
-          debit=(other_adj if other_adj >= 0 else 0),
-          credit=(abs(other_adj) if other_adj < 0 else 0), indent=2),
+        R("Received vs Billed  (SRBNB / PI-without-update-stock timing)",
+          debit=(adj_srbnb if adj_srbnb >= 0 else 0),
+          credit=(abs(adj_srbnb) if adj_srbnb < 0 else 0), indent=2),
+        R("Stock Entries / Transfers  (non-purchase, non-sale moves)",
+          debit=(adj_se if adj_se >= 0 else 0),
+          credit=(abs(adj_se) if adj_se < 0 else 0), indent=2),
+        R("Stock Reconciliation value vs GL posting",
+          debit=(adj_recon if adj_recon >= 0 else 0),
+          credit=(abs(adj_recon) if adj_recon < 0 else 0), indent=2),
+        R("Rounding (3-dp aggregation)",
+          debit=(adj_round if adj_round >= 0 else 0),
+          credit=(abs(adj_round) if adj_round < 0 else 0), indent=2),
         R("NET COGS  (Trial Balance)",
           debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
