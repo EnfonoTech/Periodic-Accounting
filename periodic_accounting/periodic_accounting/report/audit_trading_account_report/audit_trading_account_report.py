@@ -531,26 +531,6 @@ def _sle_svd_by_vt(co, fd, td):
     return {r.vt: flt(r.v) for r in rows}
 
 
-def _srbnb_tie_out(co, fd, td):
-    """One informational row: what the Stock Received But Not Billed account actually moved.
-
-    It is deliberately outside the bridge arithmetic - it is not a component of COGS - but it is
-    printed here because this is where a reviewer looks for it, and because the timing line above
-    is routinely mistaken for it.
-    """
-    accounts = frappe.db.get_all("Account", filters={"company": co,
-        "account_type": "Stock Received But Not Billed"}, pluck="name")
-    if not accounts:
-        return []
-    movement = flt(_srbnb_movement(co, fd, td), 3)
-    if not movement:
-        return []
-    return [R("Memo: Stock Received But Not Billed account movement (per General Ledger)",
-              debit=(movement if movement >= 0 else 0),
-              credit=(abs(movement) if movement < 0 else 0), indent=2,
-              link=_gl_account(co, fd, td, accounts[0]))]
-
-
 def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
@@ -625,9 +605,12 @@ def build_main(co, fd, td, wh, cc):
     recon_lines = [
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
-        # NOT the SRBNB account balance: this is stock value in versus purchases counted. The
-        # account itself is reported on its own line below, because the two never agree and
-        # labelling this one "SRBNB" sent people to the Trial Balance looking for a match.
+        # NOT the SRBNB account balance: this is stock value in versus purchases counted, which is
+        # the figure the bridge arithmetic needs. Over a short window the two happen to coincide in
+        # magnitude (15-24 Jul: both 1,163.933) because one receipt-not-yet-billed drives both; over
+        # a year they diverge badly (1 Jan-14 Jul: 456.757 against 15,724.074) because the account
+        # also carries invoices clearing PRIOR-period receipts. The account movement therefore lives
+        # in the drill-down, not on a second line here that readers would expect to match this one.
         ("Received vs Billed timing  (stock in vs purchases counted)", adj_srbnb,
          "Received vs Billed (SRBNB)"),
         ("Stock Entries / Transfers  (non-purchase, non-sale moves)", adj_se,
@@ -652,7 +635,6 @@ def build_main(co, fd, td, wh, cc):
             for label, value, head in recon_lines
             if abs(flt(value, 3)) > 0.0005
         ],
-        *_srbnb_tie_out(co, fd, td),
         R("NET COGS  (Trial Balance)",
           debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
