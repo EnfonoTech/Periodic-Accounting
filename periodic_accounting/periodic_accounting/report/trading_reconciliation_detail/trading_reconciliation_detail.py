@@ -223,20 +223,46 @@ def _non_sales_block(audit, co, fd, td, filters):
 # ── head: received but not billed ─────────────────────────────────────────────
 
 def _srbnb_block(audit, co, fd, td, filters):
+    """The timing head, and separately the SRBNB account as the ledger holds it.
+
+    These are two different measures and were previously conflated, which is why the block would
+    not tie to either. The head is a STOCK VALUE difference: how much value arrived on Purchase
+    Receipts and stock-carrying Purchase Invoices versus how much purchase the trading formula
+    counted. The SRBNB account is a LIABILITY: a receipt credits it, an invoice clears it. Each
+    part below reconciles to its own figure, and both are shown.
+    """
     wh = filters.get("warehouse")
-    cc_vnos = audit.get_cc_vouchers(co, filters.get("cost_center")) if filters.get("cost_center") else None
+    cc_vnos = (audit.get_cc_vouchers(co, filters.get("cost_center"))
+               if filters.get("cost_center") else None)
     local_pur, import_pur, _lcv, pur_ret = audit.purchase_split(co, fd, td, wh, cc_vnos)
     net_pur = local_pur + import_pur - pur_ret
     svd = audit._sle_svd_by_vt(co, fd, td)
-    total = flt((svd.get("Purchase Receipt", 0.0) + svd.get("Purchase Invoice", 0.0)) - net_pur, 3)
+    pr_svd = flt(svd.get("Purchase Receipt", 0.0), 3)
+    pi_svd = flt(svd.get("Purchase Invoice", 0.0), 3)
+    total = flt((pr_svd + pi_svd) - net_pur, 3)
 
     rows = [_head(
-        _("Received vs Billed  (SRBNB / PI-without-update-stock timing)"), total,
-        _("Stock arrived in one period and the invoice landed in another. A Purchase Receipt "
-          "raises stock value with no purchase in the formula yet; a Purchase Invoice without "
-          "Update Stock bills a purchase whose stock arrived earlier."),
+        _("Received vs Billed timing  (stock in vs purchases counted)"), total,
+        _("Stock arrived in one period and the invoice landed in another. This is a stock-value "
+          "difference, NOT the balance of the Stock Received But Not Billed account — that account "
+          "is shown separately below and will not equal this figure."),
     )]
 
+    # part A: exactly what the head is made of, so it reconciles by construction
+    rows += [
+        _detail(_("Stock value received on Purchase Receipts"), None, None, None,
+                0, pr_svd, pr_svd,
+                _("Stock Ledger value of every Purchase Receipt in the period")),
+        _detail(_("Stock value received on Purchase Invoices"), None, None, None,
+                0, pi_svd, pi_svd,
+                _("Stock Ledger value of Purchase Invoices that carried their own stock")),
+        _detail(_("Less: Net Purchases already counted by the formula"), None, None, None,
+                0, -flt(net_pur, 3), -flt(net_pur, 3),
+                _("Local + Import purchases less returns, as the trading formula counted them")),
+    ]
+
+    # the biggest contributors, named, with anything not listed stated rather than dropped
+    cap = 40
     detail = frappe.db.sql(
         """
         SELECT sle.voucher_type, sle.voucher_no, MIN(sle.posting_date) AS posting_date,
@@ -249,40 +275,70 @@ def _srbnb_block(audit, co, fd, td, filters):
         GROUP BY sle.voucher_type, sle.voucher_no
         HAVING ABS(SUM(sle.stock_value_difference)) > 0.0005
         ORDER BY ABS(SUM(sle.stock_value_difference)) DESC
-        LIMIT 300
         """,
         {"company": co, "from_date": fd, "to_date": td},
         as_dict=True,
     )
-
     billed = {}
-    if detail:
-        names = [r.voucher_no for r in detail if r.voucher_type == "Purchase Receipt"]
-        if names:
-            for row in frappe.db.get_all(
-                "Purchase Invoice Item",
-                filters={"purchase_receipt": ["in", names], "docstatus": 1},
-                fields=["purchase_receipt", "parent"],
-            ):
-                billed.setdefault(row.purchase_receipt, set()).add(row.parent)
+    receipts = [r.voucher_no for r in detail[:cap] if r.voucher_type == "Purchase Receipt"]
+    if receipts:
+        for row in frappe.db.get_all(
+            "Purchase Invoice Item",
+            filters={"purchase_receipt": ["in", receipts], "docstatus": 1},
+            fields=["purchase_receipt", "parent"],
+        ):
+            billed.setdefault(row.purchase_receipt, set()).add(row.parent)
 
-    for r in detail:
+    if detail:
+        rows.append({"particulars": _("Largest receipts and stock-carrying invoices"),
+                     "indent": 1, "reason": _("Context only — these are components of the stock "
+                                              "value above, not additional amounts")})
+    for r in detail[:cap]:
         if r.voucher_type == "Purchase Receipt":
             invoices = billed.get(r.voucher_no)
-            reason = (
-                _("Receipt billed by %s") % ", ".join(sorted(invoices))
-                if invoices
-                else _("Receipt not yet billed — stock is in, the purchase is not")
-            )
+            reason = (_("Receipt billed by %s") % ", ".join(sorted(invoices)) if invoices
+                      else _("Receipt not yet billed — stock is in, the purchase is not"))
         else:
             reason = _("Purchase Invoice carrying its own stock movement")
         rows.append(_detail(r.voucher_no, r.voucher_type, r.voucher_no, r.posting_date,
-                            0, flt(r.svd), flt(r.svd), reason))
+                            0, flt(r.svd), 0, reason))
+    if len(detail) > cap:
+        rows.append({"particulars": _("... and %d more not listed") % (len(detail) - cap),
+                     "indent": 1,
+                     "reason": _("Listing is capped; the totals above cover every document")})
 
-    rows.append({"particulars": _("Less: purchases already in the trading formula"),
-                 "difference": -flt(net_pur, 3), "indent": 1,
-                 "reason": _("Net Purchases as the formula counted them, removed so only the "
-                             "timing difference remains")})
+    # part B: the account itself, which is what a Trial Balance or General Ledger shows
+    gl_total = flt(audit._srbnb_movement(co, fd, td), 3)
+    rows.append(_head(
+        _("Stock Received But Not Billed account, per the General Ledger"), gl_total,
+        _("The liability account's own movement. A receipt credits it and an invoice clears it, so "
+          "this is what the General Ledger and Trial Balance report for the account."),
+    ))
+    accounts = frappe.db.get_all("Account", filters={"company": co,
+        "account_type": "Stock Received But Not Billed"}, pluck="name")
+    if accounts:
+        by_type = frappe.db.sql(
+            """
+            SELECT gle.voucher_type, COUNT(DISTINCT gle.voucher_no) AS vouchers,
+                   ROUND(SUM(gle.debit), 3) AS dr, ROUND(SUM(gle.credit), 3) AS cr,
+                   ROUND(SUM(gle.debit - gle.credit), 3) AS net
+            FROM `tabGL Entry` gle
+            WHERE gle.company = %(company)s
+              AND gle.account IN %(accounts)s
+              AND gle.is_cancelled = 0
+              AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            GROUP BY gle.voucher_type
+            ORDER BY ABS(SUM(gle.debit - gle.credit)) DESC
+            """,
+            {"company": co, "accounts": accounts, "from_date": fd, "to_date": td},
+            as_dict=True,
+        )
+        for r in by_type:
+            rows.append(_detail(
+                _("%(vt)s postings") % {"vt": _(r.voucher_type)}, None, None, None,
+                flt(r.net), 0, flt(r.net),
+                _("%(n)s vouchers, debit %(dr)s, credit %(cr)s")
+                % {"n": r.vouchers, "dr": r.dr, "cr": r.cr}))
     return rows + _blank()
 
 

@@ -76,6 +76,12 @@ def _pi_drill(co, fd, td, wh=None, txn="All", ctype="All"):
         p["warehouse"] = wh
     return _url("Purchase Invoice Stocked Items", p)
 
+def _gl_account(co, fd, td, account):
+    """General Ledger for one account, so a ledger figure can be opened where it lives."""
+    return _url("General Ledger", {"company": co, "from_date": fd, "to_date": td,
+                                   "account": account})
+
+
 def _recon_drill(co, fd, td, head, wh=None, cc=None):
     """Reconciliation head drill-down: the documents making up the clicked bridging line."""
     p = {"company": co, "from_date": fd, "to_date": td, "head": head}
@@ -525,6 +531,26 @@ def _sle_svd_by_vt(co, fd, td):
     return {r.vt: flt(r.v) for r in rows}
 
 
+def _srbnb_tie_out(co, fd, td):
+    """One informational row: what the Stock Received But Not Billed account actually moved.
+
+    It is deliberately outside the bridge arithmetic - it is not a component of COGS - but it is
+    printed here because this is where a reviewer looks for it, and because the timing line above
+    is routinely mistaken for it.
+    """
+    accounts = frappe.db.get_all("Account", filters={"company": co,
+        "account_type": "Stock Received But Not Billed"}, pluck="name")
+    if not accounts:
+        return []
+    movement = flt(_srbnb_movement(co, fd, td), 3)
+    if not movement:
+        return []
+    return [R("Memo: Stock Received But Not Billed account movement (per General Ledger)",
+              debit=(movement if movement >= 0 else 0),
+              credit=(abs(movement) if movement < 0 else 0), indent=2,
+              link=_gl_account(co, fd, td, accounts[0]))]
+
+
 def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
@@ -599,7 +625,10 @@ def build_main(co, fd, td, wh, cc):
     recon_lines = [
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
-        ("Received vs Billed  (SRBNB / PI-without-update-stock timing)", adj_srbnb,
+        # NOT the SRBNB account balance: this is stock value in versus purchases counted. The
+        # account itself is reported on its own line below, because the two never agree and
+        # labelling this one "SRBNB" sent people to the Trial Balance looking for a match.
+        ("Received vs Billed timing  (stock in vs purchases counted)", adj_srbnb,
          "Received vs Billed (SRBNB)"),
         ("Stock Entries / Transfers  (non-purchase, non-sale moves)", adj_se,
          "Stock Entries / Transfers"),
@@ -623,6 +652,7 @@ def build_main(co, fd, td, wh, cc):
             for label, value, head in recon_lines
             if abs(flt(value, 3)) > 0.0005
         ],
+        *_srbnb_tie_out(co, fd, td),
         R("NET COGS  (Trial Balance)",
           debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
