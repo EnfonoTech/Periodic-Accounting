@@ -594,6 +594,19 @@ def build_main(co, fd, td, wh, cc):
             rows.append(R("Stock Reconciliation  (Shortage / Write-off)",
                           credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
 
+    # A head worth nothing explains nothing: only lines with a value are printed, so the block
+    # shows what actually stands between the two COGS figures instead of a column of zeros.
+    recon_lines = [
+        ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
+        ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
+        ("Received vs Billed  (SRBNB / PI-without-update-stock timing)", adj_srbnb,
+         "Received vs Billed (SRBNB)"),
+        ("Stock Entries / Transfers  (non-purchase, non-sale moves)", adj_se,
+         "Stock Entries / Transfers"),
+        ("Stock Reconciliation value vs GL posting", adj_recon, "Stock Reconciliation vs GL"),
+        ("Rounding (3-dp aggregation)", adj_round, None),
+    ]
+
     rows += [
         R("Less: Closing Stock", credit=cl, indent=1, link=_sb(co, td, td, wh)),
         R("NET COGS  (Calculated — Trading Formula)",
@@ -602,31 +615,14 @@ def build_main(co, fd, td, wh, cc):
           bold=True, row_type="net_cogs"),
         R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section",
           link=_recon_drill(co, fd, td, "All", wh, cc)),
-        # every bridging line drills into the documents behind it, the way the purchase rows do
-        R("Less: Sales valuation drift (SLE vs GL on sales)",
-          debit=(sales_drift if sales_drift >= 0 else 0),
-          credit=(abs(sales_drift) if sales_drift < 0 else 0), indent=2,
-          link=_recon_drill(co, fd, td, "Sales valuation drift", wh, cc)),
-        R("Add: Non-stock / Non-sales COGS postings",
-          debit=(nonsales if nonsales >= 0 else 0),
-          credit=(abs(nonsales) if nonsales < 0 else 0), indent=2,
-          link=_recon_drill(co, fd, td, "Non-stock / Non-sales COGS postings", wh, cc)),
-        R("Received vs Billed  (SRBNB / PI-without-update-stock timing)",
-          debit=(adj_srbnb if adj_srbnb >= 0 else 0),
-          credit=(abs(adj_srbnb) if adj_srbnb < 0 else 0), indent=2,
-          link=_recon_drill(co, fd, td, "Received vs Billed (SRBNB)", wh, cc)),
-        R("Stock Entries / Transfers  (non-purchase, non-sale moves)",
-          debit=(adj_se if adj_se >= 0 else 0),
-          credit=(abs(adj_se) if adj_se < 0 else 0), indent=2,
-          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)),
-        R("Stock Reconciliation value vs GL posting",
-          debit=(adj_recon if adj_recon >= 0 else 0),
-          credit=(abs(adj_recon) if adj_recon < 0 else 0), indent=2,
-          link=_recon_drill(co, fd, td, "Stock Reconciliation vs GL", wh, cc)),
-        # Rounding is a residual with no documents to show, so it stays unlinked
-        R("Rounding (3-dp aggregation)",
-          debit=(adj_round if adj_round >= 0 else 0),
-          credit=(abs(adj_round) if adj_round < 0 else 0), indent=2),
+        *[
+            R(label,
+              debit=(value if value >= 0 else 0),
+              credit=(abs(value) if value < 0 else 0), indent=2,
+              link=_recon_drill(co, fd, td, head, wh, cc) if head else None)
+            for label, value, head in recon_lines
+            if abs(flt(value, 3)) > 0.0005
+        ],
         R("NET COGS  (Trial Balance)",
           debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
