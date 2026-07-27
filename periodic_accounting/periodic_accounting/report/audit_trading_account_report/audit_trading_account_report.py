@@ -76,6 +76,16 @@ def _pi_drill(co, fd, td, wh=None, txn="All", ctype="All"):
         p["warehouse"] = wh
     return _url("Purchase Invoice Stocked Items", p)
 
+def _recon_drill(co, fd, td, head, wh=None, cc=None):
+    """Reconciliation head drill-down: the documents making up the clicked bridging line."""
+    p = {"company": co, "from_date": fd, "to_date": td, "head": head}
+    if wh:
+        p["warehouse"] = wh
+    if cc:
+        p["cost_center"] = cc
+    return _url("Trading Reconciliation Detail", p)
+
+
 def _lcv_drill(co, fd, td, wh=None):
     p = {"company": co, "from_date": fd, "to_date": td}
     if wh:
@@ -590,22 +600,30 @@ def build_main(co, fd, td, wh, cc):
           debit =formula_cogs if formula_cogs >= 0 else 0,
           credit=abs(formula_cogs) if formula_cogs <  0 else 0,
           bold=True, row_type="net_cogs"),
-        R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section"),
+        R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section",
+          link=_recon_drill(co, fd, td, "All", wh, cc)),
+        # every bridging line drills into the documents behind it, the way the purchase rows do
         R("Less: Sales valuation drift (SLE vs GL on sales)",
           debit=(sales_drift if sales_drift >= 0 else 0),
-          credit=(abs(sales_drift) if sales_drift < 0 else 0), indent=2),
+          credit=(abs(sales_drift) if sales_drift < 0 else 0), indent=2,
+          link=_recon_drill(co, fd, td, "Sales valuation drift", wh, cc)),
         R("Add: Non-stock / Non-sales COGS postings",
           debit=(nonsales if nonsales >= 0 else 0),
-          credit=(abs(nonsales) if nonsales < 0 else 0), indent=2),
+          credit=(abs(nonsales) if nonsales < 0 else 0), indent=2,
+          link=_recon_drill(co, fd, td, "Non-stock / Non-sales COGS postings", wh, cc)),
         R("Received vs Billed  (SRBNB / PI-without-update-stock timing)",
           debit=(adj_srbnb if adj_srbnb >= 0 else 0),
-          credit=(abs(adj_srbnb) if adj_srbnb < 0 else 0), indent=2),
+          credit=(abs(adj_srbnb) if adj_srbnb < 0 else 0), indent=2,
+          link=_recon_drill(co, fd, td, "Received vs Billed (SRBNB)", wh, cc)),
         R("Stock Entries / Transfers  (non-purchase, non-sale moves)",
           debit=(adj_se if adj_se >= 0 else 0),
-          credit=(abs(adj_se) if adj_se < 0 else 0), indent=2),
+          credit=(abs(adj_se) if adj_se < 0 else 0), indent=2,
+          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)),
         R("Stock Reconciliation value vs GL posting",
           debit=(adj_recon if adj_recon >= 0 else 0),
-          credit=(abs(adj_recon) if adj_recon < 0 else 0), indent=2),
+          credit=(abs(adj_recon) if adj_recon < 0 else 0), indent=2,
+          link=_recon_drill(co, fd, td, "Stock Reconciliation vs GL", wh, cc)),
+        # Rounding is a residual with no documents to show, so it stays unlinked
         R("Rounding (3-dp aggregation)",
           debit=(adj_round if adj_round >= 0 else 0),
           credit=(abs(adj_round) if adj_round < 0 else 0), indent=2),

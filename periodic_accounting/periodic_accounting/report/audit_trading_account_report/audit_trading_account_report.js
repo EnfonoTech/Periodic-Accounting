@@ -52,7 +52,13 @@ frappe.query_reports["Audit Trading Account Report"] = {
 		// ── Primary section headers (SALES / COST OF GOODS SOLD) ─────────────
 		if (rt === "section") {
 			if (fn === "particulars") {
-				return `<strong style="color:#1a237e;font-size:12px;letter-spacing:.04em">${value}</strong>`;
+				const label = `<strong style="color:#1a237e;font-size:12px;letter-spacing:.04em">${value}</strong>`;
+				// a section header can carry a drill-down too — this branch used to return before
+				// reaching the clickable-particulars case below, silently dropping the link
+				return data.link
+					? `<a href="${data.link}" title="${__("Click to view every document behind this")}"
+					       style="text-decoration:none">${label}</a>`
+					: label;
 			}
 			return "";   // suppress 0.00 on Dr/Cr for header rows
 		}
