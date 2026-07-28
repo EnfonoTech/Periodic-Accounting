@@ -261,51 +261,66 @@ def _srbnb_block(audit, co, fd, td, filters):
                 _("Local + Import purchases less returns, as the trading formula counted them")),
     ]
 
-    # the biggest contributors, named, with anything not listed stated rather than dropped
+    # Only the documents that actually create the timing difference are listed. A receipt that has
+    # been fully billed contributes its stock value to the received side AND its invoice to the
+    # purchases side, so it cancels out and cannot be part of this head; listing it only invited the
+    # question "why is a completed receipt in a reconciliation?". Those receipts are counted in one
+    # line instead, so nothing is hidden.
     cap = 40
     detail = frappe.db.sql(
         """
         SELECT sle.voucher_type, sle.voucher_no, MIN(sle.posting_date) AS posting_date,
-               ROUND(SUM(sle.stock_value_difference), 3) AS svd
+               ROUND(SUM(sle.stock_value_difference), 3) AS svd,
+               ROUND(COALESCE(pr.per_billed, 0), 2) AS per_billed
         FROM `tabStock Ledger Entry` sle
+        LEFT JOIN `tabPurchase Receipt` pr
+               ON pr.name = sle.voucher_no AND sle.voucher_type = 'Purchase Receipt'
         WHERE sle.company = %(company)s
           AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
           AND sle.is_cancelled = 0
           AND sle.voucher_type IN ('Purchase Receipt', 'Purchase Invoice')
-        GROUP BY sle.voucher_type, sle.voucher_no
+        GROUP BY sle.voucher_type, sle.voucher_no, pr.per_billed
         HAVING ABS(SUM(sle.stock_value_difference)) > 0.0005
         ORDER BY ABS(SUM(sle.stock_value_difference)) DESC
         """,
         {"company": co, "from_date": fd, "to_date": td},
         as_dict=True,
     )
-    billed = {}
-    receipts = [r.voucher_no for r in detail[:cap] if r.voucher_type == "Purchase Receipt"]
-    if receipts:
-        for row in frappe.db.get_all(
-            "Purchase Invoice Item",
-            filters={"purchase_receipt": ["in", receipts], "docstatus": 1},
-            fields=["purchase_receipt", "parent"],
-        ):
-            billed.setdefault(row.purchase_receipt, set()).add(row.parent)
 
-    if detail:
-        rows.append({"particulars": _("Largest receipts and stock-carrying invoices"),
-                     "indent": 1, "reason": _("Context only — these are components of the stock "
-                                              "value above, not additional amounts")})
-    for r in detail[:cap]:
-        if r.voucher_type == "Purchase Receipt":
-            invoices = billed.get(r.voucher_no)
-            reason = (_("Receipt billed by %s") % ", ".join(sorted(invoices)) if invoices
-                      else _("Receipt not yet billed — stock is in, the purchase is not"))
-        else:
-            reason = _("Purchase Invoice carrying its own stock movement")
-        rows.append(_detail(r.voucher_no, r.voucher_type, r.voucher_no, r.posting_date,
-                            0, flt(r.svd), 0, reason))
-    if len(detail) > cap:
-        rows.append({"particulars": _("... and %d more not listed") % (len(detail) - cap),
+    open_receipts = [r for r in detail
+                     if r.voucher_type == "Purchase Receipt" and flt(r.per_billed) < 100]
+    billed_receipts = [r for r in detail
+                       if r.voucher_type == "Purchase Receipt" and flt(r.per_billed) >= 100]
+    stock_invoices = [r for r in detail if r.voucher_type == "Purchase Invoice"]
+
+    if open_receipts:
+        rows.append({"particulars": _("Receipts whose supplier invoice is not yet posted in full"),
                      "indent": 1,
-                     "reason": _("Listing is capped; the totals above cover every document")})
+                     "reason": _("These are the documents behind the timing difference: the stock "
+                                 "is in and counted in Closing Stock, the purchase is not yet in "
+                                 "the Purchases line")})
+        for r in open_receipts[:cap]:
+            reason = (_("Not billed at all — full stock value is outstanding")
+                      if flt(r.per_billed) <= 0
+                      else _("Billed %s%% — the unbilled part is outstanding") % flt(r.per_billed))
+            rows.append(_detail(r.voucher_no, r.voucher_type, r.voucher_no, r.posting_date,
+                                0, flt(r.svd), 0, reason))
+        if len(open_receipts) > cap:
+            rows.append({"particulars": _("... and %d more open receipts not listed")
+                         % (len(open_receipts) - cap), "indent": 1,
+                         "reason": _("Listing is capped; the totals above cover every document")})
+
+    if billed_receipts:
+        rows.append(_detail(
+            _("%d fully billed receipts, not listed") % len(billed_receipts), None, None, None,
+            0, flt(sum(flt(r.svd) for r in billed_receipts), 3), 0,
+            _("Stock in and invoice posted, so these cancel out and create no timing difference")))
+
+    if stock_invoices:
+        rows.append(_detail(
+            _("%d Purchase Invoices carrying their own stock, not listed") % len(stock_invoices),
+            None, None, None, 0, flt(sum(flt(r.svd) for r in stock_invoices), 3), 0,
+            _("Stock and invoice arrive on the same document, so these create no timing difference")))
 
     # part B: the account itself, which is what a Trial Balance or General Ledger shows
     gl_total = flt(audit._srbnb_movement(co, fd, td), 3)

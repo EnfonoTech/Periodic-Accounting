@@ -31,7 +31,37 @@ def execute(filters=None):
     cc = filters.get("cost_center")
 
     rows, kv = build_main(co, fd, td, wh, cc)
-    return columns, rows, None, _make_chart(kv), _make_summary(kv)
+    return columns, rows, _formula_note(kv), _make_chart(kv), _make_summary(kv)
+
+
+def _formula_note(kv):
+    """The formula the NET COGS line is computed from, with this period's figures substituted.
+
+    Printed above the table so a reader never has to be told verbally how the figure was reached,
+    and so the definition of the Purchases line - invoices, not goods received - is on the page
+    next to the number it produces.
+    """
+    def m(v):
+        return "{:,.3f}".format(flt(v, 3))
+
+    return _(
+        "<div style='padding:10px 12px;border-left:3px solid #1f6f54;background:#f4f9f7;"
+        "margin-bottom:10px;line-height:1.55'>"
+        "<b>Net COGS (Trading Formula)</b> = Opening Stock + Net Purchases &plusmn; Stock "
+        "Adjustments &minus; Closing Stock<br>"
+        "<span style='font-family:monospace'>{op} + {pur} {sign} {adj} &minus; {cl} = "
+        "<b>{cogs}</b></span> {ccy}<br>"
+        "<span style='color:#555'>Purchases are Purchase Invoices dated in this period, goods "
+        "lines only, excluding VAT. Goods received whose supplier invoice is not yet posted are "
+        "already inside Closing Stock; their cost appears under Reconciliation to Trial Balance "
+        "as Received vs Billed timing. Stock Adjustments covers Stock Reconciliations and Stock "
+        "Entries, being the stock movements that are neither a purchase nor a sale.</span></div>"
+    ).format(
+        op=m(kv.get("opening")), pur=m(kv.get("net_purchases")),
+        sign="&minus;" if flt(kv.get("stock_adj")) < 0 else "+",
+        adj=m(abs(flt(kv.get("stock_adj")))), cl=m(kv.get("closing")),
+        cogs=m(kv.get("formula_cogs")), ccy=kv.get("currency") or "",
+    )
 
 
 def get_columns():
@@ -538,23 +568,31 @@ def build_main(co, fd, td, wh, cc):
     recon   = stock_recon_adjustment(co, fd, td, wh)
     local_pur, import_pur, _lcv, pur_ret = purchase_split(co, fd, td, wh, cc_vnos)
 
-    # Formula: COGS = Opening + Local (PI) + Import (PI) − Returns − Closing
+    # Formula: COGS = Opening + Local (PI) + Import (PI) − Returns ± Stock Adjustments − Closing
     # LCV adjusts stock valuation directly (via SLE repost), so its effect
     # flows through the opening/closing stock difference automatically.
+    #
+    # "Stock Adjustments" is the trading formula's own term for every stock move that is neither a
+    # purchase nor a sale. Stock Reconciliations were always counted here; Stock Entries (Material
+    # Receipt, Material Issue, transfers that change value) used to sit below the line as a
+    # reconciling item instead, which put the same money in a different place from the formula the
+    # accountant is reading. They are counted here now, so the build-up matches the formula and the
+    # bridge below is left with genuine timing and posting differences only.
+    _svd         = _sle_svd_by_vt(co, fd, td)
+    se_adj       = flt(_svd.get("Stock Entry", 0.0), 3)
     net_pur      = local_pur + import_pur - pur_ret
     goods_avail  = op + net_pur
-    formula_cogs = goods_avail + recon - cl
+    stock_adj    = flt(recon + se_adj, 3)
+    formula_cogs = goods_avail + stock_adj - cl
     # Reconcile periodic Trading Formula COGS to the ledger (Trial Balance) COGS.
     tb_full_cogs = _tb_cogs_full(co, fd, td, cc)
     _sales_gl    = gl_cogs_total(co, fd, td, cc)
     nonsales     = flt(tb_full_cogs - _sales_gl, 3)
     sales_drift  = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
     other_adj    = flt((tb_full_cogs - formula_cogs) - nonsales - sales_drift, 3)
-    _svd         = _sle_svd_by_vt(co, fd, td)
     adj_srbnb    = flt((_svd.get("Purchase Receipt", 0.0) + _svd.get("Purchase Invoice", 0.0)) - net_pur, 3)
-    adj_se       = flt(_svd.get("Stock Entry", 0.0), 3)
     adj_recon    = flt(_svd.get("Stock Reconciliation", 0.0) - recon, 3)
-    adj_round    = flt(other_adj - adj_srbnb - adj_se - adj_recon, 3)
+    adj_round    = flt(other_adj - adj_srbnb - adj_recon, 3)
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
     opening_date = str(add_days(fd, -1))
@@ -602,6 +640,16 @@ def build_main(co, fd, td, wh, cc):
 
     # A head worth nothing explains nothing: only lines with a value are printed, so the block
     # shows what actually stands between the two COGS figures instead of a column of zeros.
+    if se_adj:
+        if se_adj > 0:
+            rows.append(R("Stock Entries / Transfers  (received into stock, no purchase)",
+                          debit=se_adj, indent=1,
+                          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)))
+        else:
+            rows.append(R("Stock Entries / Transfers  (issued out of stock, no sale)",
+                          credit=abs(se_adj), indent=1,
+                          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)))
+
     recon_lines = [
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
@@ -613,8 +661,6 @@ def build_main(co, fd, td, wh, cc):
         # in the drill-down, not on a second line here that readers would expect to match this one.
         ("Received vs Billed timing  (stock in vs purchases counted)", adj_srbnb,
          "Received vs Billed (SRBNB)"),
-        ("Stock Entries / Transfers  (non-purchase, non-sale moves)", adj_se,
-         "Stock Entries / Transfers"),
         ("Stock Reconciliation value vs GL posting", adj_recon, "Stock Reconciliation vs GL"),
         ("Rounding (3-dp aggregation)", adj_round, None),
     ]
@@ -652,6 +698,7 @@ def build_main(co, fd, td, wh, cc):
         "net_purchases":    net_pur,
         "closing":          cl,
         "formula_cogs":     formula_cogs,
+        "stock_adj":        stock_adj,
         "net_sales":        net_sales,
         "gross_profit":     gross_profit,
         "gross_margin_pct": round(gross_profit / net_sales * 100, 1) if net_sales else 0.0,
