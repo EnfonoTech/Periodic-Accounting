@@ -47,17 +47,20 @@ def _formula_note(kv):
     return _(
         "<div style='padding:10px 12px;border-left:3px solid #1f6f54;background:#f4f9f7;"
         "margin-bottom:10px;line-height:1.55'>"
-        "<b>Net COGS (Trading Formula)</b> = Opening Stock + Net Purchases &plusmn; Stock "
-        "Adjustments &minus; Closing Stock<br>"
-        "<span style='font-family:monospace'>{op} + {pur} {sign} {adj} &minus; {cl} = "
-        "<b>{cogs}</b></span> {ccy}<br>"
+        "<b>Net COGS (Trading Formula)</b> = Opening Stock + Net Purchases + Goods Received Not "
+        "Yet Invoiced &plusmn; Stock Adjustments &minus; Closing Stock<br>"
+        "<span style='font-family:monospace'>{op} + {pur} {gsign} {grni} {sign} {adj} &minus; "
+        "{cl} = <b>{cogs}</b></span> {ccy}<br>"
         "<span style='color:#555'>Purchases are Purchase Invoices dated in this period, goods "
-        "lines only, excluding VAT. Goods received whose supplier invoice is not yet posted are "
-        "already inside Closing Stock; their cost appears under Reconciliation to Trial Balance "
-        "as Received vs Billed timing. Stock Adjustments covers Stock Reconciliations and Stock "
-        "Entries, being the stock movements that are neither a purchase nor a sale.</span></div>"
+        "lines only, excluding VAT, so the line ties to the Purchase Register. Goods received "
+        "whose supplier invoice is not yet posted are already inside Closing Stock, so they are "
+        "added back on their own line and can be drilled to the receipts concerned. Stock "
+        "Adjustments covers Stock Reconciliations and Stock Entries, being the stock movements "
+        "that are neither a purchase nor a sale.</span></div>"
     ).format(
         op=m(kv.get("opening")), pur=m(kv.get("net_purchases")),
+        gsign="&minus;" if flt(kv.get("grni")) < 0 else "+",
+        grni=m(abs(flt(kv.get("grni")))),
         sign="&minus;" if flt(kv.get("stock_adj")) < 0 else "+",
         adj=m(abs(flt(kv.get("stock_adj")))), cl=m(kv.get("closing")),
         cogs=m(kv.get("formula_cogs")), ccy=kv.get("currency") or "",
@@ -581,7 +584,12 @@ def build_main(co, fd, td, wh, cc):
     _svd         = _sle_svd_by_vt(co, fd, td)
     se_adj       = flt(_svd.get("Stock Entry", 0.0), 3)
     net_pur      = local_pur + import_pur - pur_ret
-    goods_avail  = op + net_pur
+    # Goods received whose supplier invoice is not posted yet. They are already inside Closing
+    # Stock, so the formula subtracts them; without this line it never adds them, and NET COGS
+    # comes out short by exactly this much. Naming it here rather than below the NET COGS line is
+    # what lets the report show ONE cost of goods sold instead of two figures and a bridge.
+    grni         = flt((_svd.get("Purchase Receipt", 0.0) + _svd.get("Purchase Invoice", 0.0)) - net_pur, 3)
+    goods_avail  = op + net_pur + grni
     stock_adj    = flt(recon + se_adj, 3)
     formula_cogs = goods_avail + stock_adj - cl
     # Reconcile periodic Trading Formula COGS to the ledger (Trial Balance) COGS.
@@ -590,9 +598,8 @@ def build_main(co, fd, td, wh, cc):
     nonsales     = flt(tb_full_cogs - _sales_gl, 3)
     sales_drift  = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
     other_adj    = flt((tb_full_cogs - formula_cogs) - nonsales - sales_drift, 3)
-    adj_srbnb    = flt((_svd.get("Purchase Receipt", 0.0) + _svd.get("Purchase Invoice", 0.0)) - net_pur, 3)
     adj_recon    = flt(_svd.get("Stock Reconciliation", 0.0) - recon, 3)
-    adj_round    = flt(other_adj - adj_srbnb - adj_recon, 3)
+    adj_round    = flt(other_adj - adj_recon, 3)
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
     gross_profit = net_sales - formula_cogs
     opening_date = str(add_days(fd, -1))
@@ -630,6 +637,16 @@ def build_main(co, fd, td, wh, cc):
                   debit=net_pur, bold=True, indent=1, row_type="subtotal",
                   link=_pi_drill(co, fd, td, wh)))
 
+    if grni:
+        if grni > 0:
+            rows.append(R("Add: Goods received, supplier invoice not yet posted",
+                          debit=grni, indent=1,
+                          link=_recon_drill(co, fd, td, "Received vs Billed (SRBNB)", wh, cc)))
+        else:
+            rows.append(R("Less: Invoices posted for goods received in an earlier period",
+                          credit=abs(grni), indent=1,
+                          link=_recon_drill(co, fd, td, "Received vs Billed (SRBNB)", wh, cc)))
+
     if recon:
         if recon > 0:
             rows.append(R("Stock Reconciliation  (Excess Found / Opening Load)",
@@ -653,14 +670,6 @@ def build_main(co, fd, td, wh, cc):
     recon_lines = [
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
-        # NOT the SRBNB account balance: this is stock value in versus purchases counted, which is
-        # the figure the bridge arithmetic needs. Over a short window the two happen to coincide in
-        # magnitude (15-24 Jul: both 1,163.933) because one receipt-not-yet-billed drives both; over
-        # a year they diverge badly (1 Jan-14 Jul: 456.757 against 15,724.074) because the account
-        # also carries invoices clearing PRIOR-period receipts. The account movement therefore lives
-        # in the drill-down, not on a second line here that readers would expect to match this one.
-        ("Received vs Billed timing  (stock in vs purchases counted)", adj_srbnb,
-         "Received vs Billed (SRBNB)"),
         ("Stock Reconciliation value vs GL posting", adj_recon, "Stock Reconciliation vs GL"),
         ("Rounding (3-dp aggregation)", adj_round, None),
     ]
@@ -673,14 +682,18 @@ def build_main(co, fd, td, wh, cc):
           bold=True, row_type="net_cogs"),
         R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section",
           link=_recon_drill(co, fd, td, "All", wh, cc)),
-        *[
+        *([
             R(label,
               debit=(value if value >= 0 else 0),
               credit=(abs(value) if value < 0 else 0), indent=2,
               link=_recon_drill(co, fd, td, head, wh, cc) if head else None)
             for label, value, head in recon_lines
             if abs(flt(value, 3)) > 0.0005
-        ],
+        ] or [
+            # Positive assurance beats an empty heading: a reader who sees nothing under the
+            # heading cannot tell whether the report agreed or simply failed to check.
+            R("Agrees with the Trial Balance — nothing to reconcile", indent=2)
+        ]),
         R("NET COGS  (Trial Balance)",
           debit=(tb_full_cogs if tb_full_cogs >= 0 else 0),
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
@@ -699,6 +712,7 @@ def build_main(co, fd, td, wh, cc):
         "closing":          cl,
         "formula_cogs":     formula_cogs,
         "stock_adj":        stock_adj,
+        "grni":             grni,
         "net_sales":        net_sales,
         "gross_profit":     gross_profit,
         "gross_margin_pct": round(gross_profit / net_sales * 100, 1) if net_sales else 0.0,
@@ -714,7 +728,7 @@ def build_warehouse_breakdown(co, fd, td, cc):
     if len(warehouses) <= 1:
         return []
 
-    rows = [S(), H("BREAKDOWN BY WAREHOUSE")]
+    rows = [S(), H("BREAKDOWN BY WAREHOUSE  (purchases per invoices; excludes goods not yet invoiced)")]
     for wh in warehouses:
         op   = opening_stock(co, fd, wh)
         cl   = closing_stock(co, td, wh)
@@ -741,7 +755,7 @@ def build_item_group_breakdown(co, fd, td, wh, cc):
     if not groups:
         return []
 
-    rows = [S(), H("BREAKDOWN BY ITEM GROUP")]
+    rows = [S(), H("BREAKDOWN BY ITEM GROUP  (purchases per invoices; excludes goods not yet invoiced)")]
     for ig in groups:
         op, net_pur, cl, cogs, net_sales, gp = ig_figures(co, fd, td, wh, ig)
         if op == 0 and net_pur == 0 and cl == 0 and net_sales == 0:
