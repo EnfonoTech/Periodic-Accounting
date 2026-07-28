@@ -63,6 +63,16 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			return "";   // suppress 0.00 on Dr/Cr for header rows
 		}
 
+		// ── Explanatory notes: the formula, and the same formula with this period's
+		//    figures substituted. Rendered as rows rather than as the report message
+		//    because a prepared report replays stored rows and drops the message.
+		if (rt === "note") {
+			if (fn === "particulars") {
+				return `<span style="color:#546e7a;font-style:italic">${value}</span>`;
+			}
+			return "";
+		}
+
 		// ── Secondary section headers (Breakdown by…) ────────────────────────
 		if (rt === "recon_header") {
 			if (fn === "particulars") {
