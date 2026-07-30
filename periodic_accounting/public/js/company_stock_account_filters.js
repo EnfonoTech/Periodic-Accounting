@@ -36,9 +36,36 @@ function pa_widen_account_queries(frm) {
 	});
 }
 
+// Re-applying set_query is not enough on its own: erpnext calls setup_queries(frm) from its
+// own refresh handler (company.js:99), so its filters go back on every single render of the
+// form. The helper that installs them is patched instead — once, lazily, because this file is
+// parsed before erpnext's — so for these two fields the account_type restriction is simply
+// never installed, whoever calls it and whenever.
+function pa_patch_erpnext_query_helper() {
+	if (!window.erpnext || !erpnext.company || !erpnext.company.set_custom_query) return;
+	if (erpnext.company.set_custom_query.__pa_widened) return;
+
+	const original = erpnext.company.set_custom_query;
+	const patched = function (frm, v) {
+		if (v && PA_WIDENED_FIELDS.includes(v[0])) {
+			frm.set_query(v[0], () => ({
+				filters: { company: frm.doc.name, is_group: 0 },
+			}));
+			return;
+		}
+		return original.apply(this, arguments);
+	};
+	patched.__pa_widened = true;
+	erpnext.company.set_custom_query = patched;
+}
+
 function pa_widen_soon(frm) {
+	pa_patch_erpnext_query_helper();
 	pa_widen_account_queries(frm);
-	setTimeout(() => pa_widen_account_queries(frm), 0);
+	setTimeout(() => {
+		pa_patch_erpnext_query_helper();
+		pa_widen_account_queries(frm);
+	}, 0);
 }
 
 frappe.ui.form.on("Company", {
