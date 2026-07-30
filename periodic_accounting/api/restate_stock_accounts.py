@@ -124,20 +124,33 @@ def _validate_account(company, account):
 
 
 def _refuse_closed_period(company, from_date):
-    """A closed period is closed: its balances have already been carried to retained earnings."""
+    """A closed period is closed: its balances have already been carried to retained earnings.
+
+    Period Closing Voucher carries `period_end_date` (v15) — it has no `posting_date`, so the
+    field is resolved from the meta rather than assumed, and a version that names it differently
+    degrades to skipping the guard rather than raising on a missing column.
+    """
+    meta = frappe.get_meta("Period Closing Voucher")
+    field = next((f for f in ("period_end_date", "transaction_date", "posting_date")
+                  if meta.has_field(f)), None)
+    if not field:
+        return
+
     closed = frappe.get_all(
         "Period Closing Voucher",
         filters={"company": company, "docstatus": 1},
-        pluck="posting_date",
-        order_by="posting_date desc",
+        pluck=field,
+        order_by="%s desc" % field,
         limit=1,
     )
-    closed = closed[0] if closed else None
-    if closed and getdate(from_date) <= getdate(closed):
+    if not closed or not closed[0]:
+        return
+
+    if getdate(from_date) <= getdate(closed[0]):
         frappe.throw(
             _("The period is closed to %s by a Period Closing Voucher. Restating a closed "
               "period would leave the closing entry disagreeing with the accounts it closed.")
-            % frappe.bold(str(closed))
+            % frappe.bold(str(closed[0]))
         )
 
 
