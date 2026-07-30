@@ -30,7 +30,11 @@ def execute(filters=None):
         wh = None
     cc = filters.get("cost_center")
 
-    rows, kv = build_main(co, fd, td, wh, cc)
+    rows, kv = build_main(
+        co, fd, td, wh, cc,
+        merge_adj=cint(filters.get("merge_stock_adjustments")),
+        received_basis=(filters.get("cogs_basis") or "") == "Per Goods Received",
+    )
     return columns, rows, _formula_note(kv), _make_chart(kv), _make_summary(kv)
 
 
@@ -573,7 +577,7 @@ def _sle_svd_by_vt(co, fd, td):
     return {r.vt: flt(r.v) for r in rows}
 
 
-def build_main(co, fd, td, wh, cc):
+def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
@@ -621,9 +625,6 @@ def build_main(co, fd, td, wh, cc):
     #                             into Purchases, so COGS is stated on what arrived rather than
     #                             on what was invoiced. The figure changes by exactly that
     #                             amount, and the report says so on its face.
-    merge_adj      = cint(filters.get("merge_stock_adjustments"))
-    received_basis = (filters.get("cogs_basis") or "") == "Per Goods Received"
-
     pur_for_cogs = flt(net_pur + grni, 3) if received_basis else net_pur
     grni_in_recon = 0.0 if received_basis else grni
 
