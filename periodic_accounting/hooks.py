@@ -50,6 +50,11 @@ app_include_js = "/assets/periodic_accounting/js/periodic_accounting_utils.js"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
+# ERPNext limits the two stock account fields on Company to one account_type each through a
+# link query on the form. Steel Force need Cost of Goods Sold selectable there, so the pickers
+# are widened locally — with a warning when the choice is one ERPNext would have refused.
+doctype_js = {"Company": "public/js/company_stock_account_filters.js"}
+
 # doctype_js = {"doctype" : "public/js/doctype.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
