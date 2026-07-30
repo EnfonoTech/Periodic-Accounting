@@ -125,11 +125,14 @@ def _validate_account(company, account):
 
 def _refuse_closed_period(company, from_date):
     """A closed period is closed: its balances have already been carried to retained earnings."""
-    closed = frappe.db.get_value(
+    closed = frappe.get_all(
         "Period Closing Voucher",
-        {"company": company, "docstatus": 1},
-        "max(posting_date)",
+        filters={"company": company, "docstatus": 1},
+        pluck="posting_date",
+        order_by="posting_date desc",
+        limit=1,
     )
+    closed = closed[0] if closed else None
     if closed and getdate(from_date) <= getdate(closed):
         frappe.throw(
             _("The period is closed to %s by a Period Closing Voucher. Restating a closed "
