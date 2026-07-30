@@ -32,6 +32,22 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			},
 		},
 		{
+			// Cosmetic only: the adjustments are already inside NET COGS, so this collapses the
+			// two working lines into one and leaves the figure untouched.
+			fieldname: "merge_stock_adjustments",
+			label: __("Show Stock Adjustments as one line inside COGS"),
+			fieldtype: "Check",
+			default: 0,
+		},
+		{
+			// NOT cosmetic: this restates COGS on what arrived instead of what was invoiced.
+			fieldname: "cogs_basis",
+			label: __("COGS Basis"),
+			fieldtype: "Select",
+			options: ["Per Supplier Invoices", "Per Goods Received"],
+			default: "Per Supplier Invoices",
+		},
+		{
 			fieldname: "cost_center",
 			label: __("Cost Center"),
 			fieldtype: "Link",
