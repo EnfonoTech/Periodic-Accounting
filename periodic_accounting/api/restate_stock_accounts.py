@@ -86,7 +86,7 @@ def restate(company, from_date, to_date, source_accounts, target_account, dry_ru
         for row in rows:
             frappe.db.set_value("GL Entry", row.name, "account", target_account,
                                 update_modified=False)
-        _restate_voucher_fields(plan, sources, target_account)
+        stamped_fields = _restate_voucher_fields(plan, sources, target_account)
         _annotate(plan, target_account)
         frappe.db.commit()
 
@@ -97,6 +97,7 @@ def restate(company, from_date, to_date, source_accounts, target_account, dry_ru
         "to_date": str(to_date),
         "target_account": target_account,
         "gl_rows": len(rows),
+        "voucher_fields_stamped": (stamped_fields if not dry_run else None),
         "vouchers": len(plan),
         "total_debit": flt(sum(v["debit"] for v in plan.values()), 3),
         "total_credit": flt(sum(v["credit"] for v in plan.values()), 3),
@@ -157,28 +158,45 @@ def _refuse_closed_period(company, from_date):
 def _restate_voucher_fields(plan, sources, target_account):
     """Keep the voucher's own stored account in step, so a repost does not undo this.
 
-    Only Purchase Invoice and the stock vouchers store the account; a Purchase Receipt resolves
-    the company default when its entries are built, so a repost of one already follows the new
-    default and nothing needs stamping.
+    Which voucher stores the account varies by ERPNext version — Purchase Invoice has no
+    `stock_received_but_not_billed` field on v15, for instance — so every field is checked
+    against the meta before it is read or written. A voucher that stores nothing needs nothing:
+    a Purchase Receipt resolves the company default when its entries are built, so a repost of
+    one already follows the new default.
     """
+    # (doctype, child doctype or None, fieldname)
+    CANDIDATES = (
+        ("Purchase Invoice", None, "stock_received_but_not_billed"),
+        ("Stock Reconciliation", None, "expense_account"),
+        ("Stock Entry", "Stock Entry Detail", "expense_account"),
+        ("Subcontracting Receipt", "Subcontracting Receipt Item", "expense_account"),
+    )
+
+    stamped = 0
     for (voucher_type, voucher_no) in plan:
-        if voucher_type == "Purchase Invoice":
-            if frappe.db.get_value("Purchase Invoice", voucher_no, "stock_received_but_not_billed") in sources:
-                frappe.db.set_value("Purchase Invoice", voucher_no,
-                                    "stock_received_but_not_billed", target_account,
+        for doctype, child_doctype, field in CANDIDATES:
+            if doctype != voucher_type:
+                continue
+
+            target_dt = child_doctype or doctype
+            if not frappe.db.table_exists(target_dt):
+                continue
+            if not frappe.get_meta(target_dt).has_field(field):
+                continue
+
+            if child_doctype:
+                for row in frappe.get_all(child_doctype,
+                                          filters={"parent": voucher_no, field: ["in", sources]},
+                                          pluck="name"):
+                    frappe.db.set_value(child_doctype, row, field, target_account,
+                                        update_modified=False)
+                    stamped += 1
+            elif frappe.db.get_value(doctype, voucher_no, field) in sources:
+                frappe.db.set_value(doctype, voucher_no, field, target_account,
                                     update_modified=False)
+                stamped += 1
 
-        elif voucher_type == "Stock Reconciliation":
-            if frappe.db.get_value("Stock Reconciliation", voucher_no, "expense_account") in sources:
-                frappe.db.set_value("Stock Reconciliation", voucher_no,
-                                    "expense_account", target_account, update_modified=False)
-
-        elif voucher_type == "Stock Entry":
-            for row in frappe.get_all("Stock Entry Detail",
-                                      filters={"parent": voucher_no, "expense_account": ["in", sources]},
-                                      pluck="name"):
-                frappe.db.set_value("Stock Entry Detail", row, "expense_account",
-                                    target_account, update_modified=False)
+    return stamped
 
 
 def _annotate(plan, target_account):
