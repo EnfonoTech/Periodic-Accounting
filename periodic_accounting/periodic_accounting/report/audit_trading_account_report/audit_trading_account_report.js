@@ -44,8 +44,13 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			fieldname: "cogs_basis",
 			label: __("COGS Basis"),
 			fieldtype: "Select",
-			options: ["Per Supplier Invoices", "Per Goods Received"],
-			default: "Per Supplier Invoices",
+			options: ["Per Goods Received", "Per Supplier Invoices"],
+			// Default. Purchases then means everything that increased stock value, which is what
+			// the trading formula assumes, and the computed COGS equals the ledger's own COGS
+			// exactly — no bridge to explain. "Per Supplier Invoices" keeps the older reading,
+			// where Purchases ties to the Purchase Register and the timing difference is shown
+			// under Reconciliation to Trial Balance instead.
+			default: "Per Goods Received",
 		},
 		{
 			fieldname: "cost_center",

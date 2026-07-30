@@ -33,7 +33,8 @@ def execute(filters=None):
     rows, kv = build_main(
         co, fd, td, wh, cc,
         merge_adj=cint(filters.get("merge_stock_adjustments")),
-        received_basis=(filters.get("cogs_basis") or "") == "Per Goods Received",
+        # default when the filter is absent (API / scheduled runs) matches the form's default
+        received_basis=(filters.get("cogs_basis") or "Per Goods Received") == "Per Goods Received",
     )
     return columns, rows, _formula_note(kv), _make_chart(kv), _make_summary(kv)
 
