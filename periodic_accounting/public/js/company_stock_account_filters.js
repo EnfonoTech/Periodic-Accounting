@@ -22,15 +22,32 @@
 // not removed silently: a warning is shown the moment either field is pointed somewhere ERPNext
 // would not have allowed, so nobody changes it without knowing.
 
+const PA_WIDENED_FIELDS = ["stock_adjustment_account", "stock_received_but_not_billed"];
+
+// erpnext's own company.js is loaded AFTER this file (hooks order puts the app's doctype_js
+// first), so its set_query runs last and would put the account_type filters straight back.
+// Re-applying on the next tick lands after every synchronous handler of the same event.
+function pa_widen_account_queries(frm) {
+	PA_WIDENED_FIELDS.forEach((field) => {
+		if (!frm.fields_dict[field]) return;
+		frm.set_query(field, () => ({
+			filters: { company: frm.doc.company_name || frm.doc.name, is_group: 0 },
+		}));
+	});
+}
+
+function pa_widen_soon(frm) {
+	pa_widen_account_queries(frm);
+	setTimeout(() => pa_widen_account_queries(frm), 0);
+}
+
 frappe.ui.form.on("Company", {
 	onload(frm) {
-		// any account of this company, group accounts excluded — the two account_type
-		// restrictions ERPNext applies are dropped
-		["stock_adjustment_account", "stock_received_but_not_billed"].forEach((field) => {
-			frm.set_query(field, () => ({
-				filters: { company: frm.doc.company_name || frm.doc.name, is_group: 0 },
-			}));
-		});
+		pa_widen_soon(frm);
+	},
+
+	refresh(frm) {
+		pa_widen_soon(frm);
 	},
 
 	stock_received_but_not_billed(frm) {
