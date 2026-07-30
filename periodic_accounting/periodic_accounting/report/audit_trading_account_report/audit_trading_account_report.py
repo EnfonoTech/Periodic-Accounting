@@ -531,6 +531,30 @@ def H(label):
 
 # ── Main trading account section ──────────────────────────────────────────────
 
+def _stock_accounts_merged_into_cogs(co):
+    """Is the company routing its stock postings into the Cost of Goods Sold account itself?
+
+    Steel Force point Stock Received But Not Billed and Stock Adjustment at the COGS account so
+    that Purchases means everything that increased stock value. When they do, the COGS account
+    no longer holds only the cost of goods sold: a Purchase Receipt credits it, the supplier
+    invoice debits it back, and stock adjustments land there too. The ledger figure the trading
+    account reconciles to must then be the sales postings alone, or it is comparing the formula
+    against a number that includes the purchase side twice over.
+    """
+    values = frappe.db.get_value(
+        "Company", co, ["stock_received_but_not_billed", "stock_adjustment_account"], as_dict=True
+    ) or {}
+
+    merged = []
+    for account in (values.get("stock_received_but_not_billed"), values.get("stock_adjustment_account")):
+        if not account:
+            continue
+        if frappe.db.get_value("Account", account, "account_type") == "Cost of Goods Sold":
+            merged.append(account)
+
+    return merged
+
+
 def _tb_cogs_full(co, fd, td, cc=None):
     """Full ledger (Trial Balance) COGS: net of ALL postings to COGS accounts, every voucher type."""
     p = {"company": co, "from_date": fd, "to_date": td}
@@ -632,7 +656,12 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
     formula_cogs = flt(op + pur_for_cogs, 3) + stock_adj - cl
     goods_avail  = flt(op + pur_for_cogs, 3)
     # Reconcile periodic Trading Formula COGS to the ledger (Trial Balance) COGS.
-    tb_full_cogs = _tb_cogs_full(co, fd, td, cc)
+    merged_accounts = _stock_accounts_merged_into_cogs(co)
+    # With the stock accounts merged into COGS the account balance is not the cost of goods
+    # sold — it nets the purchase side in and out again. The sales postings are.
+    tb_full_cogs = (
+        gl_cogs_total(co, fd, td, cc) if merged_accounts else _tb_cogs_full(co, fd, td, cc)
+    )
     _sales_gl    = gl_cogs_total(co, fd, td, cc)
     nonsales     = flt(tb_full_cogs - _sales_gl, 3)
     sales_drift  = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
@@ -732,6 +761,11 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
              _fmt(cl), _fmt(formula_cogs),
              "   (Purchases stated per goods received — includes %s not yet invoiced)" % _fmt(grni)
              if received_basis else ""), indent=2, row_type="note"),
+        *([
+            R("Cost of Goods Sold also receives this company's purchase receipts and stock "
+              "adjustments, so the ledger figure below counts the sales postings only.",
+              indent=2, row_type="note"),
+        ] if merged_accounts else []),
         R("Reconciliation to Trial Balance", bold=True, indent=1, row_type="section",
           link=_recon_drill(co, fd, td, "All", wh, cc)),
         *([
