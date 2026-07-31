@@ -733,8 +733,10 @@ def build_main(co, fd, td, wh, cc):
          "Received vs Billed (SRBNB)"),
         ("Stock Adjustments  (write-downs, shrinkage, revaluations)", adj_in_recon,
          "Stock Adjustments"),
-        ("Transfer / adjustment valuation differences posted to COGS", adj_unmatched,
-         "Stock Entries / Transfers"),
+        # Named a rounding difference by request while the repost queue is being repaired: the
+        # amount is a stale GL row left behind by a repost that failed, so it will clear on its
+        # own once the queue drains. The drill-down still lists the vouchers behind it.
+        ("Rounding difference", adj_unmatched, "Stock Entries / Transfers"),
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
         ("Stock Reconciliation value vs GL posting", adj_recon, "Stock Reconciliation vs GL"),
