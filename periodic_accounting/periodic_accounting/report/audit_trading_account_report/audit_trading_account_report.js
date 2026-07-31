@@ -97,13 +97,6 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			return `<strong style="color:#bf360c">${value}</strong>`;
 		}
 
-		// ── GROSS PROFIT ─────────────────────────────────────────────────────
-		if (rt === "gross_profit") {
-			const profit = (parseFloat(data.credit) || 0) > 0.005;
-			const color  = profit ? "#1b5e20" : "#b71c1c";
-			return `<strong style="color:${color};font-size:13px">${value}</strong>`;
-		}
-
 		// ── Variance rows (COGS Variance, Bin vs GL) ──────────────────────────
 		if (rt === "variance") {
 			const dr    = parseFloat(data.debit)  || 0;

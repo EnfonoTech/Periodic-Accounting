@@ -363,7 +363,7 @@ frappe.pages["audit-guide"].on_page_load = function (wrapper) {
 						</div>
 						<div class="ag-audit-point">
 							<div class="ag-audit-dot"></div>
-							<span><strong>Gross Margin % in the summary strip</strong> gives an immediate reasonableness check against prior periods without needing a separate P&amp;L report.</span>
+							<span><strong>Reconciliation to Trial Balance</strong> proves the formula figure against the Cost of Goods Sold account's own net movement, so the report cannot disagree with the Trial Balance unnoticed.</span>
 						</div>
 						<div class="ag-audit-point">
 							<div class="ag-audit-dot"></div>
@@ -440,7 +440,7 @@ frappe.pages["audit-guide"].on_page_load = function (wrapper) {
 			<!-- Trading Account -->
 			<div class="ag-section">
 				<h2 class="ag-h2">Audit Trading Account Report</h2>
-				<p class="ag-h2-sub">Opens with a summary strip (Net Sales · COGS · Gross Profit · Gross Margin %) and a bar chart. The table applies the traditional periodic formula reconstructed from Stock Ledger Entries.</p>
+				<p class="ag-h2-sub">Opens with a summary strip (Net Sales · COGS) and a bar chart. The table applies the traditional periodic formula reconstructed from Stock Ledger Entries.</p>
 
 				<div class="ag-formula">
 <span class="hl">Opening Stock</span>  +  <span class="hl">Net Purchases</span>  (Local PR + Import PR + LCV + PI Rate Adj − Returns)
@@ -474,9 +474,9 @@ frappe.pages["audit-guide"].on_page_load = function (wrapper) {
 
 					<div class="ag-card warn">
 						<div class="ag-card-icon">⚠</div>
-						<div class="ag-card-title">Gross Profit — reasonableness check</div>
+						<div class="ag-card-title">Cost of goods sold — reasonableness check</div>
 						<div class="ag-card-body">
-							Compare Gross Margin % in the summary strip to prior period.<br>
+							Compare NET COGS against net sales for the period, and against the prior period.<br>
 							<strong>Watch for:</strong> Sudden margin compression → purchase return incorrectly credited to COGS; sudden expansion → sales return not linked to original invoice; imported goods LCV posted in the wrong period inflating this period's purchases.
 						</div>
 					</div>
@@ -713,7 +713,7 @@ frappe.pages["audit-guide"].on_page_load = function (wrapper) {
 
 					<li><div class="ag-box"></div><span><strong>COGS Variance = 0.00</strong> — row shows ✅ green. Formula COGS equals perpetual GL COGS.</span></li>
 					<li><div class="ag-box"></div><span><strong>Bin vs Stock Account GL = 0.00</strong> — row shows ✅ green. Live inventory matches the balance sheet stock account.</span></li>
-					<li><div class="ag-box"></div><span><strong>Gross Margin %</strong> reviewed vs prior period. Any variance &gt; 5% has a documented explanation.</span></li>
+					<li><div class="ag-box"></div><span><strong>NET COGS (Trading Formula)</strong> agrees with <strong>NET COGS (Trial Balance)</strong>. Anything under Reconciliation to Trial Balance has a documented explanation.</span></li>
 					<li><div class="ag-box"></div><span><strong>Net Sales</strong> ties to Sales Register total for the period.</span></li>
 					<li><div class="ag-box"></div><span><strong>Total Purchases</strong> (Local PR + Import PR + LCV) ties to Purchase Receipt totals for the period. PI Rate Adj separately ties to Purchase Invoices where rate differs from the receipt.</span></li>
 					<li><div class="ag-box"></div><span><strong>Closing Stock</strong> matches Stock Balance report run on the to-date.</span></li>

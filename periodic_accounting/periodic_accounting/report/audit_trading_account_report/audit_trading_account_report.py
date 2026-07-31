@@ -485,8 +485,7 @@ def ig_figures(co, fd, td, wh, ig):
     net_sale = g_sales - sal_ret
 
     formula_cogs = opening_v + net_pur_v - closing_v
-    gross_profit = net_sale - formula_cogs
-    return opening_v, net_pur_v, closing_v, formula_cogs, net_sale, gross_profit
+    return opening_v, net_pur_v, closing_v, formula_cogs, net_sale
 
 
 # ── Row helpers ───────────────────────────────────────────────────────────────
@@ -658,7 +657,6 @@ def build_main(co, fd, td, wh, cc):
         adj_in_recon  = stock_adj
         adj_round    = flt(other_adj - grni_in_recon - adj_recon - adj_in_recon, 3)
     g_sales, sal_ret, net_sales = sales_data(co, fd, td, cc)
-    gross_profit = net_sales - formula_cogs
     opening_date = str(add_days(fd, -1))
     currency     = frappe.db.get_value("Company", co, "default_currency") or ""
 
@@ -741,11 +739,6 @@ def build_main(co, fd, td, wh, cc):
           credit=(abs(tb_full_cogs) if tb_full_cogs < 0 else 0),
           bold=True, row_type="net_cogs"),
         S(),
-        R("GROSS PROFIT" if gross_profit >= 0 else "GROSS LOSS",
-          debit =abs(gross_profit) if gross_profit <  0 else 0,
-          credit=gross_profit       if gross_profit >= 0 else 0,
-          bold=True, row_type="gross_profit"),
-        S(),
     ]
 
     kv = {
@@ -757,8 +750,6 @@ def build_main(co, fd, td, wh, cc):
         "stock_adj":        stock_adj,
         "grni":             grni,
         "net_sales":        net_sales,
-        "gross_profit":     gross_profit,
-        "gross_margin_pct": round(gross_profit / net_sales * 100, 1) if net_sales else 0.0,
         "currency":         currency,
     }
     return rows, kv
@@ -800,7 +791,7 @@ def build_item_group_breakdown(co, fd, td, wh, cc):
 
     rows = [S(), H("BREAKDOWN BY ITEM GROUP  (purchases per invoices; excludes goods not yet invoiced)")]
     for ig in groups:
-        op, net_pur, cl, cogs, net_sales, gp = ig_figures(co, fd, td, wh, ig)
+        op, net_pur, cl, cogs, net_sales = ig_figures(co, fd, td, wh, ig)
         if op == 0 and net_pur == 0 and cl == 0 and net_sales == 0:
             continue
         rows += [
@@ -811,10 +802,6 @@ def build_item_group_breakdown(co, fd, td, wh, cc):
             R("Closing Stock",      credit=cl,        indent=2),
             R("NET COGS (Formula)", debit=cogs,       indent=2, bold=True, row_type="subtotal"),
             R("Net Sales",          credit=net_sales, indent=2),
-            R("Gross Profit",
-              debit =gp if gp <  0 else 0,
-              credit=gp if gp >= 0 else 0,
-              bold=True, indent=2, row_type="gross_profit"),
         ]
     return rows
 
@@ -827,14 +814,13 @@ def _make_chart(kv):
     cl   = flt(kv.get("closing", 0), 2)
     cogs = flt(kv.get("formula_cogs", 0), 2)
     ns   = flt(kv.get("net_sales", 0), 2)
-    gp   = flt(kv.get("gross_profit", 0), 2)
 
     return {
         "data": {
-            "labels": ["Opening Stock", "Net Purchases", "Less Closing", "Formula COGS", "Net Sales", "Gross Profit"],
+            "labels": ["Opening Stock", "Net Purchases", "Less Closing", "Formula COGS", "Net Sales"],
             "datasets": [
-                {"name": "Stock Flow", "values": [op,  pur, cl,   cogs, 0,           0         ]},
-                {"name": "P & L",      "values": [0,   0,   0,    0,    ns, max(gp, 0)          ]},
+                {"name": "Stock Flow", "values": [op, pur, cl, cogs, 0 ]},
+                {"name": "P & L",      "values": [0,  0,   0,  0,    ns]},
             ],
         },
         "type": "bar",
@@ -846,14 +832,8 @@ def _make_chart(kv):
 def _make_summary(kv):
     ns   = kv.get("net_sales", 0)
     cogs = kv.get("formula_cogs", 0)
-    gp   = kv.get("gross_profit", 0)
-    pct  = kv.get("gross_margin_pct", 0)
     cur  = kv.get("currency", "")
     return [
-        {"value": ns,   "label": "Net Sales",    "datatype": "Currency", "currency": cur, "indicator": "Blue"},
-        {"value": cogs, "label": "COGS",          "datatype": "Currency", "currency": cur, "indicator": "Orange"},
-        {"value": gp,   "label": "Gross Profit",  "datatype": "Currency", "currency": cur,
-         "indicator": "Green" if gp >= 0 else "Red"},
-        {"value": pct,  "label": "Gross Margin %","datatype": "Percent",
-         "indicator": "Green" if gp >= 0 else "Red"},
+        {"value": ns,   "label": "Net Sales", "datatype": "Currency", "currency": cur, "indicator": "Blue"},
+        {"value": cogs, "label": "COGS",      "datatype": "Currency", "currency": cur, "indicator": "Orange"},
     ]
