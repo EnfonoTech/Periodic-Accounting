@@ -550,6 +550,30 @@ def _tb_cogs_full(co, fd, td, cc=None):
     return flt(r[0].v) if r else 0.0
 
 
+def _cogs_adjustment_gl(co, fd, td, cc=None):
+    """Net posted to Cost of Goods Sold by anything outside the trade cycle.
+
+    Sales Invoice and Delivery Note are the cost of goods sold; Purchase Invoice and Purchase
+    Receipt are the two halves of the receipt-to-invoice cycle that cancel each other. What is
+    left - Stock Entry, Stock Reconciliation, Journal Entry - is an adjustment, and comparing it
+    against the stock value those documents actually moved is what identifies a posting with no
+    movement behind it.
+    """
+    p = {"company": co, "from_date": fd, "to_date": td}
+    cc_cond = " AND gle.cost_center=%(cost_center)s" if cc else ""
+    if cc: p["cost_center"] = cc
+    r = frappe.db.sql(
+        "SELECT COALESCE(SUM(gle.debit-gle.credit),0) v "
+        "FROM `tabGL Entry` gle INNER JOIN `tabAccount` acc ON acc.name=gle.account "
+        "WHERE gle.company=%(company)s AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s "
+        "AND gle.is_cancelled=0 AND acc.root_type='Expense' "
+        "AND acc.account_type='Cost of Goods Sold' "
+        "AND gle.voucher_type NOT IN ('Sales Invoice','Delivery Note','Purchase Invoice',"
+        "'Purchase Receipt')" + cc_cond,
+        p, as_dict=True)
+    return flt(r[0].v) if r else 0.0
+
+
 def _sales_stock_out(co, fd, td, wh=None, cc=None):
     """Positive stock value that left via SI/DN legs posting to COGS (= -sum SLE svd for those vouchers)."""
     r = frappe.db.sql("SELECT COALESCE(SUM(sle.stock_value_difference),0) v FROM `tabStock Ledger Entry` sle "
@@ -643,9 +667,18 @@ def build_main(co, fd, td, wh, cc):
         # The receipt side goes in and straight back out, and an adjustment debits the account
         # while raising Closing Stock by the same amount, so both cancel. Nothing is left to
         # bridge but the residual from valuing stock and postings to three decimals.
-        nonsales = sales_drift = adj_recon = grni_in_recon = adj_in_recon = 0.0
-        adj_round = flt(tb_full_cogs - formula_cogs, 3)
+        nonsales = adj_recon = grni_in_recon = adj_in_recon = 0.0
+        sales_drift = flt(_sales_gl - _sales_stock_out(co, fd, td, wh, cc), 3)
+        # An adjustment that moves stock value cancels against Closing Stock. One that posts
+        # without moving any does not, and that is the whole of the residual here: ERPNext values
+        # the outgoing side of an inter-warehouse transfer at the source rate and the incoming side
+        # at the transfer rate, and posts the gap to the Stock Adjustment account - which on a
+        # merged company is this one. Net stock movement nil, ledger movement real.
+        adj_gl = _cogs_adjustment_gl(co, fd, td, cc)
+        adj_unmatched = flt(stock_adj + adj_gl, 3)
+        adj_round = flt(tb_full_cogs - formula_cogs - adj_unmatched - sales_drift, 3)
     else:
+        adj_unmatched = 0.0
         # Separate accounts: the ledger's cost of goods sold is the sales postings only, so the
         # invoice-basis formula differs from it by the goods received but not yet invoiced and by
         # the stock adjustments, which are carried in their own expense account.
@@ -700,6 +733,8 @@ def build_main(co, fd, td, wh, cc):
          "Received vs Billed (SRBNB)"),
         ("Stock Adjustments  (write-downs, shrinkage, revaluations)", adj_in_recon,
          "Stock Adjustments"),
+        ("Transfer / adjustment valuation differences posted to COGS", adj_unmatched,
+         "Stock Entries / Transfers"),
         ("Less: Sales valuation drift (SLE vs GL on sales)", sales_drift, "Sales valuation drift"),
         ("Add: Non-stock / Non-sales COGS postings", nonsales, "Non-stock / Non-sales COGS postings"),
         ("Stock Reconciliation value vs GL posting", adj_recon, "Stock Reconciliation vs GL"),
