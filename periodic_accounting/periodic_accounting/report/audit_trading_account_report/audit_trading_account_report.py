@@ -30,12 +30,7 @@ def execute(filters=None):
         wh = None
     cc = filters.get("cost_center")
 
-    rows, kv = build_main(
-        co, fd, td, wh, cc,
-        merge_adj=cint(filters.get("merge_stock_adjustments")),
-        # default when the filter is absent (API / scheduled runs) matches the form's default
-        received_basis=(filters.get("cogs_basis") or "Per Goods Received") == "Per Goods Received",
-    )
+    rows, kv = build_main(co, fd, td, wh, cc)
     return columns, rows, _formula_note(kv), _make_chart(kv), _make_summary(kv)
 
 
@@ -52,26 +47,16 @@ def _formula_note(kv):
     return _(
         "<div style='padding:10px 12px;border-left:3px solid #1f6f54;background:#f4f9f7;"
         "margin-bottom:10px;line-height:1.55'>"
-        "<b>Net COGS (Trading Formula)</b> = Opening Stock + Purchases &plusmn; Stock Adjustments "
-        "&minus; Closing Stock<br>"
+        "<b>Net COGS (Trading Formula)</b> = Opening Stock + Purchases &minus; Closing Stock<br>"
         "<span style='font-family:monospace'>{op} + {pur} {sign} {adj} &minus; {cl} = "
-        "<b>{cogs}</b></span> {ccy}  &nbsp;&nbsp;{grni_note}<br>"
-        "<span style='color:#555'>Purchases are Purchase Invoices dated in this period, goods "
-        "lines only, excluding VAT, so the line ties to the Purchase Register. Goods received "
-        "whose supplier invoice is not yet posted are already inside Closing Stock but are not in "
-        "Purchases, so they appear under Reconciliation to Trial Balance and can be drilled to the "
-        "receipts concerned. Stock "
-        "Adjustments covers Stock Reconciliations and Stock Entries, being the stock movements "
-        "that are neither a purchase nor a sale.</span></div>"
+        "<b>{cogs}</b></span> {ccy}<br>"
+        "<span style='color:#555'>Purchases is every movement that increased stock value in the "
+        "period: supplier invoices, goods received whose invoice has not been posted yet, and the "
+        "stock adjustments that are neither a purchase nor a sale. Stated that way the trading "
+        "formula reaches the same cost of goods sold the ledger carries, so there is nothing left "
+        "to reconcile.</span></div>"
     ).format(
         op=m(kv.get("opening")), pur=m(kv.get("net_purchases")),
-        grni_note=(
-            _("Purchases are stated <b>per goods received</b>: they include {0} received but "
-              "not yet invoiced.").format(m(kv.get("grni")))
-            if kv.get("received_basis")
-            else _("plus Goods Received Not Yet Invoiced {0} under Reconciliation to Trial "
-                   "Balance").format(m(kv.get("grni")))
-        ),
         sign="&minus;" if flt(kv.get("stock_adj")) < 0 else "+",
         adj=m(abs(flt(kv.get("stock_adj")))), cl=m(kv.get("closing")),
         cogs=m(kv.get("formula_cogs")), ccy=kv.get("currency") or "",
@@ -602,7 +587,7 @@ def _sle_svd_by_vt(co, fd, td):
     return {r.vt: flt(r.v) for r in rows}
 
 
-def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
+def build_main(co, fd, td, wh, cc):
     cc_vnos = get_cc_vouchers(co, cc) if cc else None
     op      = opening_stock(co, fd, wh)
     cl      = closing_stock(co, td, wh)
@@ -650,11 +635,14 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
     #                             into Purchases, so COGS is stated on what arrived rather than
     #                             on what was invoiced. The figure changes by exactly that
     #                             amount, and the report says so on its face.
-    pur_for_cogs = flt(net_pur + grni, 3) if received_basis else net_pur
-    grni_in_recon = 0.0 if received_basis else grni
+    # Purchases on the received basis: invoices, plus goods received whose invoice has not
+    # arrived, plus the stock adjustments — everything that put value into stock.
+    pur_for_cogs = flt(net_pur + grni, 3)
+    purchases_for_cogs = flt(pur_for_cogs + stock_adj, 3)
+    grni_in_recon = 0.0
 
-    formula_cogs = flt(op + pur_for_cogs, 3) + stock_adj - cl
-    goods_avail  = flt(op + pur_for_cogs, 3)
+    formula_cogs = flt(op + purchases_for_cogs, 3) - cl
+    goods_avail  = flt(op + purchases_for_cogs, 3)
     # Reconcile periodic Trading Formula COGS to the ledger (Trial Balance) COGS.
     merged_accounts = _stock_accounts_merged_into_cogs(co)
     # With the stock accounts merged into COGS the account balance is not the cost of goods
@@ -681,8 +669,7 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
         S(),
 
         R("COST OF GOODS SOLD", bold=True, row_type="section"),
-        R("Opening Stock + Purchases ± Stock Adjustments − Closing Stock "
-          "= Cost of Goods Sold", indent=1, row_type="note"),
+        R("Opening Stock + Purchases − Closing Stock = Cost of Goods Sold", indent=1, row_type="note"),
         R("Opening Stock", debit=op, indent=1,
           link=_sb(co, opening_date, opening_date, wh)),
 
@@ -703,43 +690,13 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
                       credit=pur_ret, indent=2,
                       link=_pi_drill(co, fd, td, wh, txn="Returns", ctype="All")))
 
-    if received_basis and grni:
-        rows.append(R("Add: Goods Received Not Yet Invoiced  (stated on receipts, not invoices)",
-                      debit=grni, indent=2,
-                      link=_recon_drill(co, fd, td, "Received vs Billed (SRBNB)", wh, cc)))
-
-    rows.append(R("Net Purchases" + ("  (per goods received)" if received_basis else ""),
-                  debit=pur_for_cogs, bold=True, indent=1, row_type="subtotal",
+    # Purchases is every movement that increased stock value, so goods received but not yet
+    # invoiced and the stock adjustments are part of this subtotal rather than lines of their
+    # own. Both amounts stay in the figure — only the working is shorter — and the subtotal
+    # keeps its drill-down, so the documents behind them are still one click away.
+    rows.append(R("Net Purchases  (all stock received, including adjustments)",
+                  debit=purchases_for_cogs, bold=True, indent=1, row_type="subtotal",
                   link=_pi_drill(co, fd, td, wh)))
-
-
-    if merge_adj:
-        # One line instead of two. NET COGS is untouched — these were always inside the
-        # formula — so this only changes how much of the working the reader is shown.
-        if stock_adj:
-            rows.append(R("Stock Adjustments  (reconciliations and stock entries, combined)",
-                          debit=(stock_adj if stock_adj > 0 else 0),
-                          credit=(abs(stock_adj) if stock_adj < 0 else 0), indent=1,
-                          link=_recon_drill(co, fd, td, "All", wh, cc)))
-    elif recon:
-        if recon > 0:
-            rows.append(R("Stock Reconciliation  (Excess Found / Opening Load)",
-                          debit=recon, indent=1, link=_sl(co, fd, td, wh)))
-        else:
-            rows.append(R("Stock Reconciliation  (Shortage / Write-off)",
-                          credit=abs(recon), indent=1, link=_sl(co, fd, td, wh)))
-
-    # A head worth nothing explains nothing: only lines with a value are printed, so the block
-    # shows what actually stands between the two COGS figures instead of a column of zeros.
-    if se_adj and not merge_adj:
-        if se_adj > 0:
-            rows.append(R("Stock Entries / Transfers  (received into stock, no purchase)",
-                          debit=se_adj, indent=1,
-                          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)))
-        else:
-            rows.append(R("Stock Entries / Transfers  (issued out of stock, no sale)",
-                          credit=abs(se_adj), indent=1,
-                          link=_recon_drill(co, fd, td, "Stock Entries / Transfers", wh, cc)))
 
     recon_lines = [
         ("Add: Goods Received Not Yet Invoiced  (in Closing Stock, not in Purchases)", grni_in_recon,
@@ -756,11 +713,10 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
           debit =formula_cogs if formula_cogs >= 0 else 0,
           credit=abs(formula_cogs) if formula_cogs <  0 else 0,
           bold=True, row_type="net_cogs"),
-        R("%s + %s %s %s − %s = %s%s"
-          % (_fmt(op), _fmt(pur_for_cogs), "−" if stock_adj < 0 else "+", _fmt(abs(stock_adj)),
-             _fmt(cl), _fmt(formula_cogs),
-             "   (Purchases stated per goods received — includes %s not yet invoiced)" % _fmt(grni)
-             if received_basis else ""), indent=2, row_type="note"),
+        R("%s + %s − %s = %s   (Purchases includes %s received not yet invoiced and %s of "
+          "stock adjustments)"
+          % (_fmt(op), _fmt(purchases_for_cogs), _fmt(cl), _fmt(formula_cogs),
+             _fmt(grni), _fmt(stock_adj)), indent=2, row_type="note"),
         *([
             R("Cost of Goods Sold also receives this company's purchase receipts and stock "
               "adjustments, so the ledger figure below counts the sales postings only.",
@@ -797,7 +753,6 @@ def build_main(co, fd, td, wh, cc, merge_adj=0, received_basis=False):
         # the header prints the figure the formula actually used, which on the received basis
         # is purchases plus the goods not yet invoiced
         "net_purchases":    pur_for_cogs,
-        "received_basis":   received_basis,
         "closing":          cl,
         "formula_cogs":     formula_cogs,
         "stock_adj":        stock_adj,

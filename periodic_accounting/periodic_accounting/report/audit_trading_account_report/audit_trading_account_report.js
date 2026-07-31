@@ -32,27 +32,6 @@ frappe.query_reports["Audit Trading Account Report"] = {
 			},
 		},
 		{
-			// Cosmetic only: the adjustments are already inside NET COGS, so this collapses the
-			// two working lines into one and leaves the figure untouched.
-			fieldname: "merge_stock_adjustments",
-			label: __("Show Stock Adjustments as one line inside COGS"),
-			fieldtype: "Check",
-			default: 0,
-		},
-		{
-			// NOT cosmetic: this restates COGS on what arrived instead of what was invoiced.
-			fieldname: "cogs_basis",
-			label: __("COGS Basis"),
-			fieldtype: "Select",
-			options: ["Per Goods Received", "Per Supplier Invoices"],
-			// Default. Purchases then means everything that increased stock value, which is what
-			// the trading formula assumes, and the computed COGS equals the ledger's own COGS
-			// exactly — no bridge to explain. "Per Supplier Invoices" keeps the older reading,
-			// where Purchases ties to the Purchase Register and the timing difference is shown
-			// under Reconciliation to Trial Balance instead.
-			default: "Per Goods Received",
-		},
-		{
 			fieldname: "cost_center",
 			label: __("Cost Center"),
 			fieldtype: "Link",
