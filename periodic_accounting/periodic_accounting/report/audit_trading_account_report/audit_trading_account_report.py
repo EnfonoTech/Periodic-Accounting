@@ -733,9 +733,8 @@ def build_main(co, fd, td, wh, cc):
 
     kv = {
         "opening":          op,
-        # the header prints the figure the formula actually used, which on the received basis
-        # is purchases plus the goods not yet invoiced
-        "net_purchases":    pur_for_cogs,
+        # the header prints the same Purchases figure the body does: supplier invoices only
+        "net_purchases":    purchases_for_cogs,
         "closing":          cl,
         "formula_cogs":     formula_cogs,
         "stock_adj":        stock_adj,
